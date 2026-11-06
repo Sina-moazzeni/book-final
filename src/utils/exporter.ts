@@ -11,17 +11,22 @@ import { resolveApiUrl } from './aiClient.ts';
  * Clean chapter titles by removing artificial chunk suffixes like:
  * "(بخش 1)", "(بخش ۱)", "- بخش 1", "بخش 1", "[Part 1]", "(Part 1)", etc.
  */
-export function cleanChapterTitle(title: string): string {
+export function cleanChapterTitle(title: any): string {
   if (!title) return 'فصل کتاب';
-  let cleaned = title
-    .replace(/\s*[\(\[\{]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]/gi, '')
-    .replace(/\s*[-–—|:]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+/gi, '')
-    .replace(/\s+بخش\s+[0-9۰-۹IVXLCDMivxlcdm]+$/gi, '')
-    .replace(/\s*[\(\[\{]\s*(?:Part|Section|Chunk)\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]/gi, '')
-    .replace(/\s*[-–—|:]\s*(?:Part|Section|Chunk)\s*[0-9۰-۹IVXLCDMivxlcdm]+/gi, '')
-    .trim();
+  const str = typeof title === 'string' ? title : String(title);
+  try {
+    let cleaned = str
+      .replace(/\s*[\(\[\{]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]/gi, '')
+      .replace(/\s*[-–—|:]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+/gi, '')
+      .replace(/\s+بخش\s+[0-9۰-۹IVXLCDMivxlcdm]+$/gi, '')
+      .replace(/\s*[\(\[\{]\s*(?:Part|Section|Chunk)\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]/gi, '')
+      .replace(/\s*[-–—|:]\s*(?:Part|Section|Chunk)\s*[0-9۰-۹IVXLCDMivxlcdm]+/gi, '')
+      .trim();
 
-  return cleaned || 'فصل کتاب';
+    return cleaned || 'فصل کتاب';
+  } catch (e) {
+    return str || 'فصل کتاب';
+  }
 }
 
 /**
@@ -29,47 +34,51 @@ export function cleanChapterTitle(title: string): string {
  * Enforces strong readability, appropriate line-height, and generous margins between paragraphs.
  */
 export function formatToDistinctParagraphs(html: string): string {
-  if (!html || !html.trim()) return '';
+  if (!html || typeof html !== 'string' || !html.trim()) return '';
 
-  let clean = sanitizeTranslatedHtml(html);
+  try {
+    let clean = sanitizeTranslatedHtml(html);
 
-  // If text doesn't contain any <p>, <h1>, <h2> tags at all, wrap distinct blocks into <p>
-  if (!/<(p|h[1-3]|blockquote|div)[\s>]/i.test(clean)) {
-    const rawParagraphs = clean
-      .split(/\n\s*\n/)
-      .map(p => p.trim())
-      .filter(Boolean);
-
-    return rawParagraphs
-      .map(p => {
-        const textWithBreaks = p.replace(/\n/g, '<br/>');
-        return `<p style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;">${textWithBreaks}</p>`;
-      })
-      .join('\n\n');
-  }
-
-  // If single <p> tags contain multiple consecutive <br><br> or linebreaks, break them into separate paragraphs
-  clean = clean.replace(/<p([^>]*)>([\s\S]*?)<\/p>/gi, (match, attrs, content) => {
-    // If the paragraph has double <br> or multiple breaks, split into multiple <p>
-    if (/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n/i.test(content)) {
-      const parts = content
-        .split(/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n/i)
-        .map((part: string) => part.trim())
+    // If text doesn't contain any <p>, <h1>, <h2> tags at all, wrap distinct blocks into <p>
+    if (!/<(p|h[1-3]|blockquote|div)[\s>]/i.test(clean)) {
+      const rawParagraphs = clean
+        .split(/\n\s*\n/)
+        .map(p => p.trim())
         .filter(Boolean);
 
-      return parts
-        .map((part: string) => `<p${attrs || ' style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;"'}>${part}</p>`)
+      return rawParagraphs
+        .map(p => {
+          const textWithBreaks = p.replace(/\n/g, '<br/>');
+          return `<p style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;">${textWithBreaks}</p>`;
+        })
         .join('\n\n');
     }
 
-    // Ensure margin-bottom is at least 22px in style attribute for clear separation
-    if (!attrs.includes('margin-bottom')) {
-      return `<p${attrs} style="margin-bottom: 24px; line-height: 2.2; font-size: 12.5pt; text-align: justify;">${content}</p>`;
-    }
-    return match;
-  });
+    // If single <p> tags contain multiple consecutive <br><br> or linebreaks, break them into separate paragraphs
+    clean = clean.replace(/<p([^>]*)>([\s\S]*?)<\/p>/gi, (match, attrs, content) => {
+      // If the paragraph has double <br> or multiple breaks, split into multiple <p>
+      if (/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n/i.test(content)) {
+        const parts = content
+          .split(/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n/i)
+          .map((part: string) => part.trim())
+          .filter(Boolean);
 
-  return clean;
+        return parts
+          .map((part: string) => `<p${attrs || ' style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;"'}>${part}</p>`)
+          .join('\n\n');
+      }
+
+      // Ensure margin-bottom is at least 22px in style attribute for clear separation
+      if (!attrs.includes('margin-bottom')) {
+        return `<p${attrs} style="margin-bottom: 24px; line-height: 2.2; font-size: 12.5pt; text-align: justify;">${content}</p>`;
+      }
+      return match;
+    });
+
+    return clean;
+  } catch (e) {
+    return html;
+  }
 }
 
 /**
@@ -78,28 +87,32 @@ export function formatToDistinctParagraphs(html: string): string {
  * Descriptive anchor texts like <a href="...">متن</a> are retained as clean plain text.
  */
 export function stripBookUrls(html: string): string {
-  if (!html) return '';
-  let cleaned = html;
+  if (!html || typeof html !== 'string') return '';
+  try {
+    let cleaned = html;
 
-  // 1. If anchor tag text itself is a URL, remove the whole anchor tag
-  cleaned = cleaned.replace(/<a\s+[^>]*href=["'][^"']*["'][^>]*>\s*https?:\/\/[^\s<]+<\/a>/gi, '');
-  cleaned = cleaned.replace(/<a\s+[^>]*href=["'][^"']*["'][^>]*>\s*www\.[^\s<]+<\/a>/gi, '');
+    // 1. If anchor tag text itself is a URL, remove the whole anchor tag
+    cleaned = cleaned.replace(/<a\s+[^>]*href=["'][^"']*["'][^>]*>\s*https?:\/\/[^\s<]+<\/a>/gi, '');
+    cleaned = cleaned.replace(/<a\s+[^>]*href=["'][^"']*["'][^>]*>\s*www\.[^\s<]+<\/a>/gi, '');
 
-  // 2. If anchor tag has descriptive text, keep only the descriptive text and drop the <a> link wrapper
-  cleaned = cleaned.replace(/<a\s+[^>]*href=["'][^"']*["'][^>]*>([\s\S]*?)<\/a>/gi, '$1');
+    // 2. If anchor tag has descriptive text, keep only the descriptive text and drop the <a> link wrapper
+    cleaned = cleaned.replace(/<a\s+[^>]*href=["'][^"']*["'][^>]*>([\s\S]*?)<\/a>/gi, '$1');
 
-  // 3. Remove raw URLs in plain text: https://... or http://...
-  cleaned = cleaned.replace(/https?:\/\/[^\s<>"'\)]+/gi, '');
+    // 3. Remove raw URLs in plain text: https://... or http://...
+    cleaned = cleaned.replace(/https?:\/\/[^\s<>"'\)]+/gi, '');
 
-  // 4. Remove www.... links in plain text
-  cleaned = cleaned.replace(/(?:^|\s)(?:www\.)[a-z0-9\-]+(?:\.[a-z0-9\-]+)+(?:\/[^\s<>"'\)]*)?/gi, ' ');
+    // 4. Remove www.... links in plain text
+    cleaned = cleaned.replace(/(?:^|\s)(?:www\.)[a-z0-9\-]+(?:\.[a-z0-9\-]+)+(?:\/[^\s<>"'\)]*)?/gi, ' ');
 
-  // 5. Clean up any leftover empty parentheses or brackets like () or [] or [ ]
-  cleaned = cleaned.replace(/\(\s*\)/g, '');
-  cleaned = cleaned.replace(/\[\s*\]/g, '');
-  cleaned = cleaned.replace(/\s{2,}/g, ' ');
+    // 5. Clean up any leftover empty parentheses or brackets like () or [] or [ ]
+    cleaned = cleaned.replace(/\(\s*\)/g, '');
+    cleaned = cleaned.replace(/\[\s*\]/g, '');
+    cleaned = cleaned.replace(/\s{2,}/g, ' ');
 
-  return cleaned.trim();
+    return cleaned.trim();
+  } catch (e) {
+    return html;
+  }
 }
 
 /**
@@ -108,7 +121,7 @@ export function stripBookUrls(html: string): string {
  */
 export function isReferenceOrBibliographyChunk(chunk: { chapterTitle?: string; englishText?: string; translatedHtml?: string }): boolean {
   if (!chunk) return false;
-  const title = (chunk.chapterTitle || '').toLowerCase();
+  const title = (chunk.chapterTitle ? String(chunk.chapterTitle) : '').toLowerCase();
   const keywords = [
     'references',
     'bibliography',
@@ -139,20 +152,23 @@ export function isReferenceOrBibliographyChunk(chunk: { chapterTitle?: string; e
  * Applies separator lines, smaller readable font, and distinct numbering badges.
  */
 export function formatFootnotesAndReferences(html: string): string {
-  if (!html) return '';
-  let formatted = html;
+  if (!html || typeof html !== 'string') return '';
+  try {
+    let formatted = html;
 
-  // Enhance footnotes or notes paragraphs
-  // E.g. <p>[1] ...</p> or <p>[۱] ...</p> or <p>پاورقی: ...</p> or <p>1. ...</p>
-  formatted = formatted.replace(
-    /<p([^>]*)>\s*(\[[0-9۰-۹IVXLCDMivxlcdm]+\]|\([0-9۰-۹IVXLCDMivxlcdm]+\)|(?:پانویس|پاورقی|پی‌نوشت|یادداشت)\s*[:：]|\b[0-9۰-۹]+\s*[-–.]\s*)([\s\S]*?)<\/p>/gi,
-    (match, attrs, num, content) => {
-      // If content is substantial, render as an elegant distinctive footnote
-      return `<div class="book-footnote"><span class="book-footnote-badge">${num}</span> <span class="book-footnote-text">${content}</span></div>`;
-    }
-  );
+    // Enhance footnotes or notes paragraphs
+    // E.g. <p>[1] ...</p> or <p>[۱] ...</p> or <p>پاورقی: ...</p> or <p>1. ...</p>
+    formatted = formatted.replace(
+      /<p([^>]*)>\s*(\[[0-9۰-۹IVXLCDMivxlcdm]+\]|\([0-9۰-۹IVXLCDMivxlcdm]+\)|(?:پانویس|پاورقی|پی‌نوشت|یادداشت)\s*[:：]|\b[0-9۰-۹]+\s*[-–.]\s*)([\s\S]*?)<\/p>/gi,
+      (_match, _attrs, num, content) => {
+        return `<div class="book-footnote"><span class="book-footnote-badge">${num}</span> <span class="book-footnote-text">${content}</span></div>`;
+      }
+    );
 
-  return formatted;
+    return formatted;
+  } catch (e) {
+    return html;
+  }
 }
 
 /**
@@ -160,41 +176,43 @@ export function formatFootnotesAndReferences(html: string): string {
  * and formats footnotes for elegant book typography.
  */
 export function sanitizeTranslatedHtml(html: string): string {
-  if (!html) return '';
+  if (!html || typeof html !== 'string') return '';
+  try {
+    // Strip ugly raw URLs and hyperlinks from book text
+    let sanitized = stripBookUrls(html);
 
-  // Strip ugly raw URLs and hyperlinks from book text
-  let sanitized = stripBookUrls(html);
+    sanitized = sanitized
+      .replace(/<span[^>]*style=["'][^"']*#(?:9b2c2c|c53030|e53e3e)[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi, '$1')
+      .replace(/<span[^>]*class=["'][^"']*highlight[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi, '$1')
+      .replace(/<h[1-3][^>]*>\s*مقدمه و بخش نخست\s*(?:\([^\)]*\))?\s*<\/h[1-3]>/gi, '')
+      .replace(/<h[1-3][^>]*>[^<]*[\(\[\{]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}][^<]*<\/h[1-3]>/gi, '')
+      .replace(/<p[^>]*>\s*[\(\[\{]?\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]?\s*<\/p>/gi, '')
+      .replace(/(?:margin-right|margin-left|padding-right|padding-left|text-indent)\s*:\s*[^;"]+;?/gi, '')
+      .trim();
 
-  sanitized = sanitized
-    .replace(/<span[^>]*style=["'][^"']*#(?:9b2c2c|c53030|e53e3e)[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi, '$1')
-    .replace(/<span[^>]*class=["'][^"']*highlight[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi, '$1')
-    .replace(/<h[1-3][^>]*>\s*مقدمه و بخش نخست\s*(?:\([^\)]*\))?\s*<\/h[1-3]>/gi, '')
-    .replace(/<h[1-3][^>]*>[^<]*[\(\[\{]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}][^<]*<\/h[1-3]>/gi, '')
-    .replace(/<p[^>]*>\s*[\(\[\{]?\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]?\s*<\/p>/gi, '')
-    // Strip accidental inline horizontal margins, paddings or text-indent that cause text overflow or right-edge clipping
-    .replace(/(?:margin-right|margin-left|padding-right|padding-left|text-indent)\s*:\s*[^;"]+;?/gi, '')
-    .trim();
-
-  // Deduplicate identical images in chunk HTML (ensuring each image only appears ONCE)
-  const seenSrcs = new Set<string>();
-  sanitized = sanitized.replace(
-    /(?:<div[^>]*class="[^"]*book-illustration-wrap[^"]*"[^>]*>[\s\S]*?<img\s+[^>]*src=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>|<figure[^>]*>[\s\S]*?<img\s+[^>]*src=["']([^"']+)["'][^>]*>[\s\S]*?<\/figure>|<img\s+[^>]*src=["']([^"']+)["'][^>]*>)/gi,
-    (wholeMatch, src1, src2, src3) => {
-      const src = src1 || src2 || src3;
-      if (!src) return wholeMatch;
-      const fingerprint = src.length > 250 ? src.slice(0, 250) : src;
-      if (seenSrcs.has(fingerprint)) {
-        return '';
+    // Deduplicate identical images in chunk HTML safely
+    const seenSrcs = new Set<string>();
+    sanitized = sanitized.replace(
+      /(?:<div[^>]*class="[^"]*book-illustration-wrap[^"]*"[^>]*>[\s\S]*?<img\s+[^>]*src=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>|<figure[^>]*>[\s\S]*?<img\s+[^>]*src=["']([^"']+)["'][^>]*>[\s\S]*?<\/figure>|<img\s+[^>]*src=["']([^"']+)["'][^>]*>)/gi,
+      (wholeMatch, src1, src2, src3) => {
+        const src = src1 || src2 || src3;
+        if (!src) return wholeMatch;
+        const fingerprint = src.length > 250 ? src.slice(0, 250) : src;
+        if (seenSrcs.has(fingerprint)) {
+          return '';
+        }
+        seenSrcs.add(fingerprint);
+        return wholeMatch;
       }
-      seenSrcs.add(fingerprint);
-      return wholeMatch;
-    }
-  );
+    );
 
-  // Format footnotes and references into distinct publication styling
-  sanitized = formatFootnotesAndReferences(sanitized);
+    // Format footnotes and references into distinct publication styling
+    sanitized = formatFootnotesAndReferences(sanitized);
 
-  return sanitized;
+    return sanitized;
+  } catch (e) {
+    return html;
+  }
 }
 
 /**
@@ -202,34 +220,36 @@ export function sanitizeTranslatedHtml(html: string): string {
  * Strips HTML markup while preserving paragraph breaks, headings, and quotes.
  */
 export function htmlToPlainText(html: string): string {
-  if (!html) return '';
-  let clean = html;
+  if (!html || typeof html !== 'string') return '';
+  try {
+    let clean = html;
 
-  // Preserve image slots cleanly without producing duplicate tokens for nested wrappers
-  clean = clean.replace(/<figure[^>]*>[\s\S]*?<img[^>]*>[\s\S]*?<\/figure>|<div[^>]*class="[^"]*book-illustration-wrap[^"]*"[^>]*>[\s\S]*?<\/div>|<img[^>]*>/gi, '\n[[تصویر کتاب]]\n');
-  // Collapse any consecutive duplicate image placeholders into a single token
-  clean = clean.replace(/(?:\[\[(?:تصویر کتاب|IMAGE_PRESERVED_SLOT_\d+)\]\]\s*){2,}/gi, '[[تصویر کتاب]]\n');
+    // Preserve image slots cleanly
+    clean = clean.replace(/<figure[^>]*>[\s\S]*?<img[^>]*>[\s\S]*?<\/figure>|<div[^>]*class="[^"]*book-illustration-wrap[^"]*"[^>]*>[\s\S]*?<\/div>|<img[^>]*>/gi, '\n[[تصویر کتاب]]\n');
+    clean = clean.replace(/(?:\[\[(?:تصویر کتاب|IMAGE_PRESERVED_SLOT_\d+)\]\]\s*){2,}/gi, '[[تصویر کتاب]]\n');
 
-  // Replace block closures with double newlines
-  clean = clean.replace(/<\/(p|h1|h2|h3|h4|blockquote|div)>/gi, '\n\n');
-  clean = clean.replace(/<br\s*[\/]?>/gi, '\n');
+    // Replace block closures with double newlines
+    clean = clean.replace(/<\/(p|h1|h2|h3|h4|blockquote|div)>/gi, '\n\n');
+    clean = clean.replace(/<br\s*[\/]?>/gi, '\n');
 
-  // Strip all other HTML tags
-  clean = clean.replace(/<[^>]+>/g, '');
+    // Strip all other HTML tags
+    clean = clean.replace(/<[^>]+>/g, '');
 
-  // Decode common HTML entities
-  clean = clean
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&zwnj;/g, '\u200c')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    // Decode common HTML entities
+    clean = clean
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&zwnj;/g, '\u200c')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
 
-  // Normalize excessive newlines (maximum 2 consecutive newlines)
-  clean = clean.replace(/\n{3,}/g, '\n\n').trim();
-  return clean;
+    clean = clean.replace(/\n{3,}/g, '\n\n').trim();
+    return clean;
+  } catch (e) {
+    return html.replace(/<[^>]+>/g, '');
+  }
 }
 
 /**

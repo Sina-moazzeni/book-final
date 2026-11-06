@@ -48,17 +48,19 @@ export const ChunkListSidebar: React.FC<ChunkListSidebarProps> = ({
   const [search, setSearch] = useState('');
 
   const safeChunks = chunks || [];
-  const failedCount = safeChunks.filter(c => c.status === 'error' || (!c.translatedHtml && !!c.errorMessage)).length;
-  const incompleteCount = safeChunks.filter(c => !c.translatedHtml || c.translatedHtml.trim().length === 0).length;
+  const failedCount = safeChunks.filter(c => c && (c.status === 'error' || (!c.translatedHtml && !!c.errorMessage))).length;
+  const incompleteCount = safeChunks.filter(c => !c || !c.translatedHtml || typeof c.translatedHtml !== 'string' || c.translatedHtml.trim().length === 0).length;
 
   const filteredChunks = safeChunks.filter(c => {
-    if (filter === 'completed' && !c.translatedHtml) return false;
-    if (filter === 'pending' && c.translatedHtml) return false;
-    if (filter === 'failed' && c.status !== 'error' && (!c.errorMessage || c.translatedHtml)) return false;
+    if (!c) return false;
+    const hasHtml = Boolean(c.translatedHtml && typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length > 0);
+    if (filter === 'completed' && !hasHtml) return false;
+    if (filter === 'pending' && hasHtml) return false;
+    if (filter === 'failed' && c.status !== 'error' && (!c.errorMessage || hasHtml)) return false;
     if (search.trim()) {
       const q = search.toLowerCase();
-      const matchTitle = c.chapterTitle.toLowerCase().includes(q);
-      const matchText = c.englishText.toLowerCase().includes(q);
+      const matchTitle = (c.chapterTitle ? String(c.chapterTitle) : '').toLowerCase().includes(q);
+      const matchText = (c.englishText ? String(c.englishText) : '').toLowerCase().includes(q);
       if (!matchTitle && !matchText) return false;
     }
     return true;

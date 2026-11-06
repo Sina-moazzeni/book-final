@@ -66,4 +66,10 @@ if (typeof window !== 'undefined') {
   };
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+
+createRoot(document.getElementById('root')!).render(
+  <ErrorBoundary fallbackTitle="خطای موقت در راه‌اندازی سامانه">
+    <App />
+  </ErrorBoundary>
+);

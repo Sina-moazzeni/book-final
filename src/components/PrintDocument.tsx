@@ -8,19 +8,41 @@ interface PrintDocumentProps {
 }
 
 export const PrintDocument: React.FC<PrintDocumentProps> = ({ project }) => {
+  if (!project || !Array.isArray(project.chunks) || project.chunks.length === 0) {
+    return null;
+  }
+
   const design = project.designConfig || DEFAULT_DESIGN_CONFIG;
-  const theme = BOOK_THEMES[design.themeId] || BOOK_THEMES.spiritual;
+  const defaultThemeFallback = BOOK_THEMES.spiritual || {
+    id: 'spiritual',
+    name: 'معنوی و عرفانی',
+    enName: 'Persian Illumination & Gold',
+    category: 'معنوی و عرفانی',
+    description: '',
+    previewBg: 'bg-[#fbf6ea]',
+    bgClass: 'bg-[#fbf6ea] text-[#241c14]',
+    pageBgColor: '#fbf6ea',
+    textColor: '#241c14',
+    headingColor: '#1e3a8a',
+    accentColor: '#b45309',
+    borderColor: '#d4af37',
+    dividerSymbol: '❦ ✤ ❦',
+    borderStyle: 'border-2 border-double border-[#d4af37]',
+    tagline: '',
+  };
+
+  const theme = (design?.themeId && BOOK_THEMES[design.themeId]) || defaultThemeFallback;
   const customColors = design.customColors || {};
 
-  const pageBgColor = customColors.pageBgColor || theme.pageBgColor;
-  const textColor = customColors.textColor || theme.textColor;
-  const heading1Color = customColors.heading1Color || theme.headingColor;
-  const heading2Color = customColors.heading2Color || theme.accentColor || '#2b6cb0';
+  const pageBgColor = customColors.pageBgColor || theme?.pageBgColor || '#ffffff';
+  const textColor = customColors.textColor || theme?.textColor || '#1e293b';
+  const heading1Color = customColors.heading1Color || theme?.headingColor || '#1a365d';
+  const heading2Color = customColors.heading2Color || theme?.accentColor || '#2b6cb0';
   const heading3Color = customColors.heading3Color || '#2c5282';
-  const headerColor = customColors.headerColor || theme.headingColor || '#718096';
+  const headerColor = customColors.headerColor || theme?.headingColor || '#718096';
   const footerColor = customColors.footerColor || textColor || '#718096';
-  const borderColor = customColors.borderColor || theme.borderColor;
-  const accentColor = customColors.accentColor || theme.accentColor;
+  const borderColor = customColors.borderColor || theme?.borderColor || '#e2e8f0';
+  const accentColor = customColors.accentColor || theme?.accentColor || '#b45309';
 
   useEffect(() => {
     if (typeof document !== 'undefined') {

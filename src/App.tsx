@@ -9,6 +9,7 @@ import { AuthModal } from './components/AuthModal.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { ProjectHeader } from './components/ProjectHeader.tsx';
 import { ChunkListSidebar } from './components/ChunkListSidebar.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 
 // Code-split heavy views and modals for sub-second FCP and minimal bundle size
 const DedicatedAuthPage = React.lazy(() => import('./components/DedicatedAuthPage.tsx').then(m => ({ default: m.DedicatedAuthPage })));
@@ -164,6 +165,16 @@ export default function App() {
   useEffect(() => {
     activeChunkIdRef.current = activeChunkId;
   }, [activeChunkId]);
+
+  const booksRef = useRef<BookProject[]>(books);
+  useEffect(() => {
+    booksRef.current = books;
+  }, [books]);
+
+  const isBatchTranslatingRef = useRef<boolean>(isBatchTranslating);
+  useEffect(() => {
+    isBatchTranslatingRef.current = isBatchTranslating;
+  }, [isBatchTranslating]);
 
   // Mobile Workspace active tab: 'editor' (translation views) vs 'chunks' (list of chapters/chunks)
   const [mobileWorkspaceTab, setMobileWorkspaceTab] = useState<'editor' | 'chunks'>('editor');
@@ -449,6 +460,9 @@ export default function App() {
 
     const interval = setInterval(async () => {
       try {
+        // Pause background polling while user is actively batch translating in workspace
+        if (isBatchTranslatingRef.current) return;
+
         const res = await fetch('/api/jobs/my-active', {
           headers: { Authorization: `Bearer ${authToken}` },
         });
@@ -501,14 +515,14 @@ export default function App() {
     if (!targetId) return null;
 
     if (isFetchingChunksRef.current[targetId]) {
-      const existing = books.find((b) => b.id === targetId) || (typeof target !== 'string' ? target : null);
+      const existing = booksRef.current.find((b) => b.id === targetId) || (typeof target !== 'string' ? target : null);
       return existing;
     }
 
-    const existing = books.find((b) => b.id === targetId) || (typeof target !== 'string' ? target : null);
+    const existing = booksRef.current.find((b) => b.id === targetId) || (typeof target !== 'string' ? target : null);
     const existingHasChunks = existing && Array.isArray(existing.chunks) && existing.chunks.length > 0;
     const existingCompletedCount = existingHasChunks
-      ? existing.chunks.filter((c) => Boolean(c.translatedHtml && c.translatedHtml.trim())).length
+      ? existing.chunks.filter((c) => Boolean(c.translatedHtml && typeof c.translatedHtml === 'string' && c.translatedHtml.trim())).length
       : 0;
     const serverCompletedCount = existing?.completedChunks || 0;
 
@@ -530,20 +544,52 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data.book) {
-          const serverChunks = Array.isArray(data.book.chunks) ? data.book.chunks : [];
-          // Preserve existing chunks if server returned empty chunks
-          const finalChunks = serverChunks.length > 0 ? serverChunks : (existingHasChunks ? existing.chunks : []);
+          const serverChunks: BookChunk[] = Array.isArray(data.book.chunks) ? data.book.chunks : [];
+          const currentBook = booksRef.current.find((b) => b.id === targetId);
+          const localChunks: BookChunk[] = (currentBook && Array.isArray(currentBook.chunks) && currentBook.chunks.length > 0)
+            ? currentBook.chunks
+            : (existingHasChunks ? existing.chunks : []);
+
+          // Safe chunk-level merge: NEVER wipe out an already translated chunk with an empty string!
+          const mergedChunks = serverChunks.length > 0
+            ? serverChunks.map((sc: BookChunk) => {
+                const localMatch = localChunks.find((lc) => lc.id === sc.id || (lc.chunkNumber === sc.chunkNumber && lc.chapterNumber === sc.chapterNumber));
+                const localHasHtml = Boolean(localMatch?.translatedHtml && typeof localMatch.translatedHtml === 'string' && localMatch.translatedHtml.trim().length > 0);
+                const serverHasHtml = Boolean(sc.translatedHtml && typeof sc.translatedHtml === 'string' && sc.translatedHtml.trim().length > 0);
+
+                if (localHasHtml && !serverHasHtml) {
+                  return {
+                    ...sc,
+                    translatedHtml: localMatch!.translatedHtml,
+                    status: (localMatch!.status === 'completed' ? 'completed' : sc.status) as any,
+                    translatedAt: localMatch!.translatedAt || sc.translatedAt,
+                    keyUsed: localMatch!.keyUsed || sc.keyUsed,
+                    modelUsed: localMatch!.modelUsed || sc.modelUsed,
+                  };
+                }
+                return sc;
+              })
+            : localChunks;
+
           const fullBook: BookProject = {
             ...data.book,
-            chunks: finalChunks,
+            chunks: mergedChunks,
             glossary: Array.isArray(data.book.glossary) ? data.book.glossary : [],
           };
-          setBooks((prev) => prev.map((b) => (b.id === targetId ? fullBook : b)));
+          setBooks((prev) => {
+            const next = prev.map((b) => (b.id === targetId ? fullBook : b));
+            booksRef.current = next;
+            return next;
+          });
           return fullBook;
         }
       } else if (res.status === 403 || res.status === 404) {
         // Book does not belong to user or was deleted
-        setBooks((prev) => prev.filter((b) => b.id !== targetId));
+        setBooks((prev) => {
+          const next = prev.filter((b) => b.id !== targetId);
+          booksRef.current = next;
+          return next;
+        });
         return null;
       }
     } catch (e) {
@@ -566,7 +612,7 @@ export default function App() {
     } catch (e) {}
 
     // Ensure activeChunkId belongs to this book
-    const targetBook = books.find((b) => b.id === targetId) || (typeof selected !== 'string' ? selected : undefined);
+    const targetBook = booksRef.current.find((b) => b.id === targetId) || (typeof selected !== 'string' ? selected : undefined);
     if (targetBook && Array.isArray(targetBook.chunks) && targetBook.chunks.length > 0) {
       const hasCurrentChunk = targetBook.chunks.some((c) => c.id === activeChunkIdRef.current);
       if (!hasCurrentChunk) {
@@ -577,7 +623,7 @@ export default function App() {
     }
 
     if (targetView === 'workspace') {
-      const targetBook = books.find((b) => b.id === targetId) || (typeof selected !== 'string' ? selected : undefined);
+      const targetBook = booksRef.current.find((b) => b.id === targetId) || (typeof selected !== 'string' ? selected : undefined);
       const hasChunks = Boolean(targetBook?.chunks && targetBook.chunks.length > 0);
 
       // ONLY show the full-page loading spinner if the book has ZERO chunks in memory!
@@ -589,7 +635,7 @@ export default function App() {
       // Fetch fresh chunks (forced reload if no chunks, or silent background update if chunks already exist)
       ensureBookChunksLoaded(targetId, !hasChunks)
         .then((fullBook) => {
-          if (fullBook && fullBook.chunks.length > 0) {
+          if (fullBook && Array.isArray(fullBook.chunks) && fullBook.chunks.length > 0) {
             if (!fullBook.chunks.some((c) => c.id === activeChunkIdRef.current)) {
               setActiveChunkId(fullBook.chunks[0].id);
               activeChunkIdRef.current = fullBook.chunks[0].id;
@@ -936,10 +982,15 @@ export default function App() {
     }
   };
 
-  // Save changes to active project
+  // Save changes to active project with immediate synchronous ref synchronization
   const handleUpdateProject = async (updatedProject: BookProject) => {
+    // 1. Synchronously update booksRef so ongoing loops immediately see the latest chunk data
+    booksRef.current = booksRef.current.map((b) => (b.id === updatedProject.id ? updatedProject : b));
+
+    // 2. Update React state
     setBooks((prev) => prev.map((b) => (b.id === updatedProject.id ? updatedProject : b)));
 
+    // 3. Persist to server
     if (authToken) {
       try {
         await fetch(`/api/books/${updatedProject.id}`, {
@@ -950,27 +1001,30 @@ export default function App() {
           },
           body: JSON.stringify(updatedProject),
         });
-      } catch (e) {}
+      } catch (e) {
+        console.warn('Error saving book project to server', e);
+      }
     }
   };
 
   // Toggle chunk exclusion from book export, print preview & PDF
   const handleToggleExcludeChunk = (chunkId: string) => {
-    const updatedChunks = project.chunks.map((c) =>
+    const currentBook = booksRef.current.find((b) => b.id === activeBookIdRef.current) || project;
+    const updatedChunks = (currentBook.chunks || []).map((c) =>
       c.id === chunkId ? { ...c, isExcludedFromBook: !c.isExcludedFromBook } : c
     );
-    const targetChunk = updatedChunks.find(c => c.id === chunkId);
+    const targetChunk = updatedChunks.find((c) => c.id === chunkId);
     const isNowExcluded = targetChunk?.isExcludedFromBook;
-    const currentExcluded = project.designConfig?.excludedChunkIds || [];
+    const currentExcluded = currentBook.designConfig?.excludedChunkIds || [];
     const newExcluded = isNowExcluded
       ? Array.from(new Set([...currentExcluded, chunkId]))
-      : currentExcluded.filter(id => id !== chunkId);
+      : currentExcluded.filter((id) => id !== chunkId);
 
     handleUpdateProject({
-      ...project,
+      ...currentBook,
       chunks: updatedChunks,
       designConfig: {
-        ...(project.designConfig || DEFAULT_DESIGN_CONFIG),
+        ...(currentBook.designConfig || DEFAULT_DESIGN_CONFIG),
         excludedChunkIds: newExcluded,
       },
     });
@@ -997,10 +1051,13 @@ export default function App() {
     downloadStyledHtml(fullBook);
   };
 
-  // Translate a single chunk (inside workspace)
-  // Translate a single chunk (inside workspace) with auth and multi-token failover
-  const translateSingleChunk = async (chunkId: string): Promise<boolean> => {
-    const chunk = project.chunks.find((c) => c.id === chunkId);
+  // Translate a single chunk with auth, server pool failover, and stale-closure prevention
+  const translateSingleChunk = async (chunkId: string, autoAdvance = true): Promise<boolean> => {
+    const targetBookId = activeBookIdRef.current;
+    const currentBook = booksRef.current.find((b) => b.id === targetBookId) || project;
+    if (!currentBook) return false;
+
+    const chunk = (currentBook.chunks || []).find((c) => c.id === chunkId);
     if (!chunk) return false;
 
     // Check user wallet balance if applicable
@@ -1012,11 +1069,14 @@ export default function App() {
       return false;
     }
 
-    // Update chunk status to queued
-    const updatedChunks = project.chunks.map((c) =>
-      c.id === chunkId ? { ...c, status: 'queued' as const, errorMessage: undefined } : c
-    );
-    handleUpdateProject({ ...project, chunks: updatedChunks });
+    // Update chunk status to queued in latest state
+    const queuedBook: BookProject = {
+      ...currentBook,
+      chunks: (currentBook.chunks || []).map((c) =>
+        c.id === chunkId ? { ...c, status: 'queued' as const, errorMessage: undefined } : c
+      ),
+    };
+    handleUpdateProject(queuedBook);
 
     try {
       const effectiveToken = authToken || (typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) : '') || currentUser?.token || '';
@@ -1029,16 +1089,16 @@ export default function App() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          bookId: project.id,
+          bookId: currentBook.id,
           chunkId,
           chunkNumber: chunk.chunkNumber,
           englishText: chunk.englishText,
-          sourceLanguage: project.sourceLanguage || 'en',
-          targetLanguage: project.targetLanguage || 'fa',
-          tone: project.tone,
-          glossary: project.glossary,
+          sourceLanguage: currentBook.sourceLanguage || 'en',
+          targetLanguage: currentBook.targetLanguage || 'fa',
+          tone: currentBook.tone,
+          glossary: currentBook.glossary,
           chapterTitle: chunk.chapterTitle,
-          model: project.model || 'gemini-3.1-flash-lite',
+          model: currentBook.model || 'gemini-3.1-flash-lite',
           serverPool,
         }),
       });
@@ -1046,53 +1106,68 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'خطای ترجمه');
 
-      if (!data.translatedHtml || data.translatedHtml.trim().length === 0) {
+      if (!data.translatedHtml || typeof data.translatedHtml !== 'string' || data.translatedHtml.trim().length === 0) {
         throw new Error('پاسخ ترجمه خالی دریافت شد.');
       }
 
-      const completed = project.chunks.map((c) =>
-        c.id === chunkId
-          ? {
-              ...c,
-              status: 'completed' as const,
-              translatedHtml: data.translatedHtml,
-              keyUsed: data.keyUsed,
-              modelUsed: data.model,
-              serverUsed: data.serverUsed,
-              switchOccurred: data.switchOccurred,
-              translatedAt: Date.now(),
-              errorMessage: undefined,
-            }
-          : c
-      );
-      handleUpdateProject({ ...project, chunks: completed });
+      // Re-read latest book to merge cleanly
+      const latestBook = booksRef.current.find((b) => b.id === targetBookId) || queuedBook;
+      const completedBook: BookProject = {
+        ...latestBook,
+        chunks: (latestBook.chunks || []).map((c) =>
+          c.id === chunkId
+            ? {
+                ...c,
+                status: 'completed' as const,
+                translatedHtml: data.translatedHtml,
+                keyUsed: data.keyUsed,
+                modelUsed: data.model,
+                serverUsed: data.serverUsed,
+                switchOccurred: data.switchOccurred,
+                translatedAt: Date.now(),
+                errorMessage: undefined,
+              }
+            : c
+        ),
+      };
+      handleUpdateProject(completedBook);
 
       // Update wallet if server returned updated balance
       if (data.walletBalance !== undefined && currentUser) {
         setCurrentUser({ ...currentUser, walletBalance: data.walletBalance });
       }
 
-      // Automatically advance to the next chunk/page so user doesn't have to manually click next
-      const currentIdx = project.chunks.findIndex((c) => c.id === chunkId);
-      if (currentIdx !== -1 && currentIdx < project.chunks.length - 1) {
-        const nextChunk = project.chunks[currentIdx + 1];
-        setActiveChunkId(nextChunk.id);
+      // Automatically advance ONLY on manual single-chunk clicks (never during batch/retry to prevent UI thrashing)
+      if (autoAdvance && !isBatchTranslatingRef.current) {
+        const currentIdx = (completedBook.chunks || []).findIndex((c) => c.id === chunkId);
+        if (currentIdx !== -1 && currentIdx < completedBook.chunks.length - 1) {
+          const nextChunk = completedBook.chunks[currentIdx + 1];
+          setActiveChunkId(nextChunk.id);
+          activeChunkIdRef.current = nextChunk.id;
+        }
       }
 
       return true;
     } catch (err: any) {
       console.error(`[App] translateSingleChunk ${chunkId} failed:`, err);
-      const failed = project.chunks.map((c) =>
-        c.id === chunkId ? { ...c, status: 'error' as const, errorMessage: err.message } : c
-      );
-      handleUpdateProject({ ...project, chunks: failed });
+      const latestBook = booksRef.current.find((b) => b.id === targetBookId) || queuedBook;
+      const failedBook: BookProject = {
+        ...latestBook,
+        chunks: (latestBook.chunks || []).map((c) =>
+          c.id === chunkId ? { ...c, status: 'error' as const, errorMessage: err.message } : c
+        ),
+      };
+      handleUpdateProject(failedBook);
       return false;
     }
   };
 
-  // Batch translate inside workspace with graceful per-chunk stop, wallet check, and automatic recovery pass
+  // Batch translate inside workspace with graceful per-chunk stop, wallet check, and deterministic execution
   const handleBatchTranslate = async () => {
-    const pending = project.chunks.filter((c) => c.status !== 'completed' || !c.translatedHtml || c.translatedHtml.trim().length === 0);
+    const currentBook = booksRef.current.find((b) => b.id === activeBookIdRef.current) || project;
+    const pending = (currentBook.chunks || []).filter(
+      (c) => c.status !== 'completed' || !c.translatedHtml || (typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length === 0)
+    );
     if (pending.length === 0) {
       alert('تمام بخش‌های این کتاب قبلاً به صورت کامل ترجمه شده‌اند.');
       return;
@@ -1107,60 +1182,45 @@ export default function App() {
 
     for (let i = 0; i < pending.length; i++) {
       if (isBatchCancelledRef.current) break;
-      const c = pending[i];
+      const chunkIdToTranslate = pending[i].id;
+
+      // Check freshest state from booksRef.current: skip if already completed
+      const bookNow = booksRef.current.find((b) => b.id === activeBookIdRef.current) || currentBook;
+      const freshChunk = (bookNow.chunks || []).find((chk) => chk.id === chunkIdToTranslate);
+      if (!freshChunk) continue;
+
+      if (freshChunk.status === 'completed' && freshChunk.translatedHtml && typeof freshChunk.translatedHtml === 'string' && freshChunk.translatedHtml.trim().length > 0) {
+        succeededCount++;
+        setBatchProgress({ current: succeededCount, total: pending.length, secondsToNextCall: 0 });
+        continue;
+      }
 
       // Check wallet before translating this chunk
-      const requiredCost = Math.round((c.wordCount || 100) * costPerWord);
+      const requiredCost = Math.round((freshChunk.wordCount || 100) * costPerWord);
       if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'staff' && (currentUser.walletBalance || 0) < requiredCost) {
-        alert(`موجودی کیف پول شما برای ادامه ترجمه متوالی ناکافی است (${(currentUser.walletBalance || 0).toLocaleString('fa-IR')} تومان). برای ترجمه بخش «${c.chapterTitle}» به ${requiredCost.toLocaleString('fa-IR')} تومان موجودی نیاز است. لطفاً کیف پول خود را شارژ فرمایید.`);
+        alert(`موجودی کیف پول شما برای ادامه ترجمه متوالی ناکافی است (${(currentUser.walletBalance || 0).toLocaleString('fa-IR')} تومان). برای ترجمه بخش «${freshChunk.chapterTitle}» به ${requiredCost.toLocaleString('fa-IR')} تومان موجودی نیاز است. لطفاً کیف پول خود را شارژ فرمایید.`);
         setIsWalletModalOpen(true);
         break;
       }
 
-      setActiveChunkId(c.id);
-      
-      // Translate current chunk
-      const ok = await translateSingleChunk(c.id);
+      // Keep active view focused on translating chunk
+      setActiveChunkId(chunkIdToTranslate);
+      activeChunkIdRef.current = chunkIdToTranslate;
+
+      // Translate with autoAdvance = false so it doesn't jump activeChunkId
+      const ok = await translateSingleChunk(chunkIdToTranslate, false);
       if (ok) {
         succeededCount++;
       }
       setBatchProgress({ current: succeededCount, total: pending.length, secondsToNextCall: 0 });
 
-      // If user clicked stop during this chunk, stop IMMEDIATELY without extra delay
+      // If user clicked stop during this chunk, stop IMMEDIATELY
       if (isBatchCancelledRef.current) {
         break;
       }
 
-      // Safe pause between calls only when translation is continuing
-      await new Promise((r) => setTimeout(r, 1600));
-    }
-
-    // --- AUTOMATIC RECOVERY PASS ---
-    // If not stopped by user and some chunks failed, retry them with next available tokens
-    if (!isBatchCancelledRef.current) {
-      const latestBook = books.find((b) => b.id === project.id);
-      const chunksToCheck = latestBook?.chunks || project.chunks;
-      const failedToRetry = chunksToCheck.filter(
-        (c) => c.status === 'error' || (!c.translatedHtml && !c.isExcludedFromBook)
-      );
-
-      if (failedToRetry.length > 0) {
-        console.log(`[BatchTranslate] Automatic Recovery Pass: Retrying ${failedToRetry.length} failed chunks...`);
-        await new Promise((r) => setTimeout(r, 2000));
-
-        for (let rIdx = 0; rIdx < failedToRetry.length; rIdx++) {
-          if (isBatchCancelledRef.current) break;
-          const fc = failedToRetry[rIdx];
-          setActiveChunkId(fc.id);
-          const recOk = await translateSingleChunk(fc.id);
-          if (recOk) {
-            succeededCount++;
-            setBatchProgress({ current: succeededCount, total: pending.length, secondsToNextCall: 0 });
-          }
-          if (isBatchCancelledRef.current) break;
-          await new Promise((r) => setTimeout(r, 1800));
-        }
-      }
+      // Safe pause between calls
+      await new Promise((r) => setTimeout(r, 1200));
     }
 
     setIsStoppingBatch(false);
@@ -1170,15 +1230,16 @@ export default function App() {
       if (succeededCount === pending.length) {
         alert(`🎉 ترجمه با موفقیت به ۱۰۰٪ رسید! تمامی ${succeededCount} بخش با موفقیت ترجمه شدند.`);
       } else {
-        alert(`⚡ ${succeededCount} از ${pending.length} بخش ترجمه شد. بخش‌های باقی‌مانده به دلیل اتمام سهمیه متوقف شدند. برای ادامه تا ۱۰۰٪، یک توکن جدید در پنل مدیریت اضافه نمایید و مجدداً «ادامه ترجمه ناقص» را بزنید.`);
+        alert(`⚡ ${succeededCount} از ${pending.length} بخش با موفقیت ترجمه شد. در صورت نیاز به ادامه بخش‌های باقی‌مانده، دکمه «ادامه ترجمه ناقص» را بزنید.`);
       }
     }
   };
 
-  // Re-translate only incomplete and failed chunks with token rotation
+  // Re-translate only incomplete and failed chunks with token rotation and deterministic execution
   const handleRetryFailedChunks = async () => {
-    const failed = project.chunks.filter(
-      (c) => c.status === 'error' || !c.translatedHtml || c.translatedHtml.trim().length === 0 || (!c.translatedHtml && !c.isExcludedFromBook)
+    const currentBook = booksRef.current.find((b) => b.id === activeBookIdRef.current) || project;
+    const failed = (currentBook.chunks || []).filter(
+      (c) => c.status === 'error' || !c.translatedHtml || (typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length === 0) || (!c.translatedHtml && !c.isExcludedFromBook)
     );
     if (failed.length === 0) {
       alert('تمامی بخش‌های این کتاب قبلاً با موفقیت ترجمه شده‌اند و بخش خطاداری وجود ندارد.');
@@ -1194,7 +1255,19 @@ export default function App() {
 
     for (let i = 0; i < failed.length; i++) {
       if (isBatchCancelledRef.current) break;
-      const c = failed[i];
+      const targetChunkId = failed[i].id;
+
+      // Always re-read freshest state from booksRef.current
+      const bookNow = booksRef.current.find((b) => b.id === activeBookIdRef.current) || currentBook;
+      const c = (bookNow.chunks || []).find((chk) => chk.id === targetChunkId);
+      if (!c) continue;
+
+      // If already has valid translation, skip
+      if (c.status === 'completed' && c.translatedHtml && typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length > 0) {
+        successCount++;
+        setBatchProgress({ current: successCount, total: failed.length, secondsToNextCall: 0 });
+        continue;
+      }
 
       const requiredCost = Math.round((c.wordCount || 100) * costPerWord);
       if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'staff' && (currentUser.walletBalance || 0) < requiredCost) {
@@ -1204,14 +1277,17 @@ export default function App() {
       }
 
       setActiveChunkId(c.id);
-      const ok = await translateSingleChunk(c.id);
+      activeChunkIdRef.current = c.id;
+
+      // Translate chunk without jumping activeChunkId
+      const ok = await translateSingleChunk(c.id, false);
       if (ok) {
         successCount++;
       }
       setBatchProgress({ current: successCount, total: failed.length, secondsToNextCall: 0 });
 
       if (isBatchCancelledRef.current) break;
-      await new Promise((r) => setTimeout(r, 1600));
+      await new Promise((r) => setTimeout(r, 1200));
     }
 
     setIsStoppingBatch(false);
@@ -1221,7 +1297,7 @@ export default function App() {
       if (successCount === failed.length) {
         alert(`🎉 تمامی بخش‌های ناقص با موفقیت ترجمه شدند و پروژه به ۱۰۰٪ رسید! (${successCount} بخش)`);
       } else {
-        alert(`⚡ ${successCount} از ${failed.length} بخش ناقص با موفقیت تکمیل گردید. ${failed.length - successCount} بخش به دلیل اتمام سهمیه توکن‌ها ترجمه نشد. برای تکمیل ۱۰۰٪، لطفاً توکن جدید در پنل مدیریت وارد کرده و دکمه را مجدداً بزنید.`);
+        alert(`⚡ ${successCount} از ${failed.length} بخش ناقص با موفقیت تکمیل گردید. در صورت نیاز به ادامه، می‌توانید مجدداً «ادامه ترجمه ناقص» را بزنید.`);
       }
     }
   };
@@ -1474,25 +1550,55 @@ export default function App() {
     );
   }
 
-  // ========================================================
-  // VIEW: WORKSPACE (ویرایشگر، مطالعه و صفحه‌بندی کتاب)
-  // ========================================================
-  const currentIndex = project.chunks.findIndex((c) => c.id === activeChunkId);
-  const currentChunk = project.chunks[currentIndex] || project.chunks[0] || null;
+  // If workspace chunks are still being fetched from the server, show a dedicated loading screen with return button
+  const isFetchingChunks = loadingWorkspaceBookId === activeBookId || Boolean(activeBookId && isFetchingChunksRef.current[activeBookId]);
+  if (isFetchingChunks && (!project.chunks || project.chunks.length === 0)) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-4 text-slate-300 p-6 font-['Vazirmatn'] selection:bg-amber-500/30">
+        <div className="relative">
+          <div className="w-14 h-14 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin"></div>
+          <div className="absolute inset-0 flex items-center justify-center text-indigo-400 font-bold text-sm">
+            📖
+          </div>
+        </div>
+        <div className="text-center space-y-1.5 max-w-sm">
+          <h3 className="text-base font-bold text-white">در حال آماده‌سازی و بارگذاری محتوای کتاب...</h3>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            محتوا و ترجمه‌های کتاب در حال دریافت از سرور می‌باشند. لطفاً چند لحظه شکیبا باشید.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCurrentView('dashboard')}
+          className="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition flex items-center gap-2 shadow-lg"
+        >
+          <span>← بازگشت به میز کاربری</span>
+        </button>
+      </div>
+    );
+  }
 
+  // Workspace helper state & computed values with safe defaults
+  const currentIndex = (project.chunks || []).findIndex((c) => c.id === activeChunkId);
+  const currentChunk = (project.chunks && project.chunks[currentIndex]) || (project.chunks && project.chunks[0]) || null;
   const isUserAdmin = currentUser?.role === 'admin' || currentUser?.role === 'staff';
   const isCloudTranslating = project.status === 'translating' || activeJobs.some(
     (j) => j.bookId === project.id && (j.status === 'queued' || j.status === 'processing')
   );
 
   return (
-    <Suspense fallback={viewFallback}>
-      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-['Vazirmatn'] selection:bg-amber-500/30">
-        {/* Printable Document for high-res PDF generation */}
-        <PrintDocument project={project} />
+    <ErrorBoundary
+      fallbackTitle="خطا در نمایش محیط ویرایش کتاب"
+      showHomeButton={true}
+      onNavigateHome={() => setCurrentView('dashboard')}
+    >
+      <Suspense fallback={viewFallback}>
+        <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-['Vazirmatn'] selection:bg-amber-500/30">
+          {/* Printable Document for high-res PDF generation */}
+          <PrintDocument project={project} />
 
-      {/* Main Studio Interactive UI */}
-      <div className="no-print flex flex-col min-h-screen">
+          {/* Main Studio Interactive UI */}
+          <div className="no-print flex flex-col min-h-screen">
         <Navbar
           currentProject={project}
           serverStatus={serverStatus}
@@ -1718,7 +1824,8 @@ export default function App() {
           />
         </Suspense>
       )}
-    </div>
-    </Suspense>
+        </div>
+      </Suspense>
+    </ErrorBoundary>
   );
 }
