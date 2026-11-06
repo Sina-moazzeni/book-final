@@ -194,24 +194,35 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
         <BookOpen className="w-12 h-12 text-slate-600 mb-3" />
         <h3 className="text-base font-bold text-slate-300">بخشی برای نمایش انتخاب نشده است</h3>
         <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
-          از فهرست کناری یک بخش را انتخاب کنید یا از دکمه «کتاب‌های نمونه» برای شروع استفاده نمایید.
+          از فهرست کناری یک بخش را انتخاب کنید یا به پیشخوان بازگردید.
         </p>
-        {onOpenMobileChunks && (
-          <button
-            onClick={onOpenMobileChunks}
-            className="md:hidden px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-indigo-600/30"
-          >
-            <Layers className="w-4 h-4" />
-            <span>مشاهده فهرست بخش‌های کتاب</span>
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {onBackToDashboard && (
+            <button
+              onClick={onBackToDashboard}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-xs font-semibold flex items-center gap-2 transition"
+            >
+              <span>← بازگشت به پیشخوان کاربری</span>
+            </button>
+          )}
+          {onOpenMobileChunks && (
+            <button
+              onClick={onOpenMobileChunks}
+              className="md:hidden px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-indigo-600/30"
+            >
+              <Layers className="w-4 h-4" />
+              <span>مشاهده فهرست بخش‌های کتاب</span>
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
   const handleCopyEnglish = () => {
-    if (currentChunk) {
-      navigator.clipboard.writeText(currentChunk.englishText);
+    if (currentChunk?.englishText) {
+      const textToCopy = typeof currentChunk.englishText === 'string' ? currentChunk.englishText : String(currentChunk.englishText);
+      navigator.clipboard.writeText(textToCopy);
       setCopiedEn(true);
       setTimeout(() => setCopiedEn(false), 2000);
     }
@@ -219,7 +230,8 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
 
   const handleCopyPersian = () => {
     if (currentChunk?.translatedHtml) {
-      const textToCopy = viewMode === 'plain' ? plainTextValue : currentChunk.translatedHtml;
+      const rawText = viewMode === 'plain' ? plainTextValue : currentChunk.translatedHtml;
+      const textToCopy = typeof rawText === 'string' ? rawText : String(rawText);
       navigator.clipboard.writeText(textToCopy);
       setCopiedFa(true);
       setTimeout(() => setCopiedFa(false), 2000);
@@ -510,7 +522,7 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
                   </button>
 
                   {/* Dedicated Button to Retry Incomplete & Failed Pages */}
-                  {project.chunks.some(c => c.status === 'error' || !c.translatedHtml || c.translatedHtml.trim().length === 0) && onRetryFailedChunks && (
+                  {project.chunks.some(c => c && (c.status === 'error' || !c.translatedHtml || typeof c.translatedHtml !== 'string' || c.translatedHtml.trim().length === 0)) && onRetryFailedChunks && (
                     <button
                       type="button"
                       onClick={onRetryFailedChunks}
@@ -518,7 +530,7 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
                       title="ادامه ترجمه بخش‌های ناقص و خطادار با چرخش خودکار بین توکن‌ها تا تکمیل ۱۰۰٪ کتاب"
                     >
                       <RotateCw className="w-3.5 h-3.5" />
-                      <span>⚡ ادامه ترجمه ناقص و خطادار ({project.chunks.filter(c => c.status === 'error' || !c.translatedHtml || c.translatedHtml.trim().length === 0).length})</span>
+                      <span>⚡ ادامه ترجمه ناقص و خطادار ({project.chunks.filter(c => c && (c.status === 'error' || !c.translatedHtml || typeof c.translatedHtml !== 'string' || c.translatedHtml.trim().length === 0)).length})</span>
                     </button>
                   )}
                 </div>
