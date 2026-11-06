@@ -1,0 +1,19 @@
+[Unit]
+Description=Persian Book Translator Commercial Node.js Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/book-translator
+ExecStart=/usr/bin/node /var/www/book-translator/dist/server.js
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=book-translator
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target

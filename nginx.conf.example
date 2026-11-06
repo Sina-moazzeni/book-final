@@ -1,0 +1,48 @@
+# /etc/nginx/sites-available/book-translator
+# --------------------------------------------------------------------------
+# کانفیگ رسمی Nginx برای سرور لینوکس اوبونتو (Ubuntu Linux)
+# سامانه هوشمند ترجمه کتاب
+# --------------------------------------------------------------------------
+
+server {
+    listen 80;
+    server_name your-domain.com www.your-domain.com; # دامنه یا IP سرور خود را اینجا وارد کنید
+
+    # ۱. مسیر فایل‌های بیلد شده فرانت‌اند (پوشه dist)
+    root /var/www/book-translator/dist;
+    index index.html;
+
+    # حداکثر حجم فایل آپلودی (برای کتاب‌های قطور و PDF تصویری تا ۱۰۰ مگابایت)
+    client_max_body_size 100M;
+
+    # ۲. فوروارد کلیه درخواست‌های API به سرور Node.js (که روی پورت ۳۰۰۰ اجرا می‌شود)
+    # این بخش بسیار حیاتی است تا Nginx به جای خطای 200 با فایل index.html، داده واقعی JSON را برگرداند:
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        # زمان انتظار مناسب برای ترجمه بخش‌های طولانی کتاب
+        proxy_connect_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
+    # ۳. فشرده‌سازی و کش فایل‌های استاتیک
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|json)$ {
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+        try_files $uri =404;
+    }
+
+    # ۴. بازگشت مسیرهای SPA به index.html (جهت رفرش صفحات بدون خطای ۴۰۴)
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

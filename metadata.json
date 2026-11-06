@@ -1,0 +1,6 @@
+{
+  "name": "مترجم و ویراستار هوشمند کتاب | ترجمه تخصصی با هوش مصنوعی",
+  "description": "سامانه ابری ترجمه و صفحه‌بندی کتاب‌های انگلیسی به فارسی با هوش مصنوعی جمینای. حفظ کامل ساختار، واژه‌نامه تخصصی و دریافت خروجی استاندارد Word و PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

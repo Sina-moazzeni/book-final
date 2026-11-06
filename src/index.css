@@ -1,0 +1,358 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-ExtraBold.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Book Preview Styling matching system instructions & custom color overrides */
+.book-render-content h1 {
+  color: var(--theme-h1-color, #1a365d);
+  font-size: var(--theme-h1-size, 22pt);
+  font-weight: 800;
+  margin-bottom: 22px;
+  margin-top: 18px;
+  text-align: center;
+  line-height: 1.45;
+}
+
+.book-render-content h2 {
+  color: var(--theme-h2-color, #2b6cb0);
+  font-size: var(--theme-h2-size, 16.5pt);
+  font-weight: 700;
+  margin-top: 28px;
+  margin-bottom: 14px;
+  line-height: 1.45;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.7);
+  padding-bottom: 8px;
+}
+
+.book-render-content h3 {
+  color: var(--theme-h3-color, #2c5282);
+  font-size: var(--theme-h3-size, 13.5pt);
+  font-weight: 600;
+  margin-top: 20px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.book-render-content p {
+  line-height: 2.2;
+  font-size: 12.5pt;
+  text-align: right; /* Clean Persian typography default */
+  margin-bottom: 24px; /* Distinct spacing between paragraphs for high readability */
+  color: var(--theme-text-color, #1e293b);
+  letter-spacing: normal;
+  word-spacing: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Text alignment controls for Persian book publishing */
+.book-render-content.book-align-right p,
+.book-align-right p {
+  text-align: right !important;
+  text-justify: none !important;
+}
+
+.book-render-content.book-align-both p,
+.book-align-both p {
+  text-align: justify !important;
+  text-justify: inter-word !important;
+}
+
+/* Prevent accidental horizontal margins or indents from pushing text outside page bounds */
+.book-render-content p,
+.book-render-content div,
+.book-render-content section {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Configurable paragraph spacing presets */
+.p-spacing-compact p {
+  margin-bottom: 16px !important;
+}
+
+.p-spacing-normal p {
+  margin-bottom: 24px !important;
+}
+
+.p-spacing-relaxed p {
+  margin-bottom: 32px !important;
+}
+
+.p-spacing-generous p {
+  margin-bottom: 42px !important;
+}
+
+.book-render-content blockquote {
+  border-right: 4px solid #3182ce;
+  border-left: none;
+  padding: 12px 20px;
+  margin: 18px 0;
+  background: #f8fafc;
+  color: #334155;
+  font-style: italic;
+  border-radius: 0 6px 6px 0;
+}
+
+/* Rich Book Publishing Callouts Suite */
+.book-callout {
+  padding: 14px 18px;
+  margin: 22px 0;
+  border-radius: 12px;
+  transition: all 0.2s ease;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.book-callout-tip {
+  background: #fffbeb;
+  border-right: 4px solid #f59e0b;
+  color: #78350f;
+}
+
+.book-callout-quote {
+  background: #f0fdf4;
+  border-right: 4px solid #10b981;
+  color: #064e3b;
+}
+
+.book-callout-warning {
+  background: #fef2f2;
+  border-right: 4px solid #ef4444;
+  color: #7f1d1d;
+}
+
+.book-callout-question {
+  background: #f0f9ff;
+  border-right: 4px solid #0284c7;
+  color: #0c4a6e;
+}
+
+.book-fleuron-divider {
+  text-align: center;
+  margin: 28px auto;
+  font-size: 15pt;
+  color: #b45309;
+  letter-spacing: 6px;
+  opacity: 0.85;
+  user-select: none;
+}
+
+.book-footnote {
+  display: block;
+  margin-top: 22px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-top: 1.5px dashed rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.04);
+  border-radius: 8px;
+  font-size: 9.5pt;
+  color: #475569;
+  line-height: 1.85;
+  text-align: justify;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.book-footnote-badge {
+  display: inline-block;
+  font-weight: 800;
+  color: #b45309;
+  font-family: inherit;
+  margin-left: 6px;
+  background: rgba(245, 158, 11, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 8.5pt;
+}
+
+.book-footnote-text {
+  display: inline;
+}
+
+.book-render-content span[style*="color: #9b2c2c"],
+.book-render-content .glossary-term {
+  color: inherit !important;
+  font-weight: 600;
+  background-color: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
+/* Embedded illustrations & images styling */
+.book-embedded-image,
+.book-illustration-wrap img,
+.english-book-view img {
+  max-width: 88% !important;
+  height: auto !important;
+  margin: 1.5rem auto !important;
+  display: block !important;
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.book-illustration-wrap {
+  text-align: center;
+  margin: 1.5rem 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.english-book-view p {
+  margin-bottom: 1rem;
+}
+
+/* Print / PDF generation styles */
+@page {
+  size: A4 portrait;
+  margin: 0; /* Setting margin to 0 completely removes browser URL, title, date and timestamps */
+}
+
+@media print {
+  *, *:before, *:after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    min-height: 100% !important;
+    background-color: var(--print-page-bg, #faf8f5) !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+    width: 100% !important;
+    min-height: 100vh !important;
+    background-color: var(--print-page-bg, #faf8f5) !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .book-page {
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .book-chapter-break {
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  .book-chapter-break.force-page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .book-illustration-figure, .book-embedded-image {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  table.print-doc-table {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: collapse !important;
+    table-layout: fixed !important;
+  }
+
+  .book-page-content-wrapper {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-wrap: break-word !important;
+    word-break: normal !important;
+  }
+
+  thead.print-table-header {
+    display: table-header-group !important;
+  }
+
+  tfoot.print-table-footer {
+    display: table-footer-group !important;
+  }
+
+  tbody.print-table-body tr {
+    page-break-inside: auto !important;
+  }
+}
+
+@media screen {
+  .print-only {
+    display: none !important;
+  }
+}
