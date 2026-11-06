@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "PORT=3000 tsx server.ts",
     "build:client": "vite build",
     "build:server": "esbuild server.ts --platform=node --format=esm --target=node18 --bundle --packages=external --outfile=dist/server.js",
     "build": "vite build && npm run build:server",

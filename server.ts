@@ -109,12 +109,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Production detection:
-// In dev (npm run dev via tsx), mount Vite dev middleware for source rendering.
-// In production (NODE_ENV === 'production'), serve compiled static assets from dist/.
 const isProduction = process.env.NODE_ENV === 'production';
+const PORT = isProduction && process.env.PORT ? process.env.PORT : 3000;
 
 // Enable Gzip/Brotli compression for all HTTP responses (reduces asset payload by up to 85%)
 app.use(compression());
