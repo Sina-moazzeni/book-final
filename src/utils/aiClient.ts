@@ -230,7 +230,7 @@ export async function testDirectFromBrowser(server: {
       };
     }
 
-    const testModel = server.model || 'gemini-2.5-flash';
+    const testModel = server.model || 'gemini-3.8-flash';
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${encodeURIComponent(key)}`;
 
     try {
@@ -519,10 +519,12 @@ ${cleanEnglishText}`;
 
           // Candidate models with fast fallback if 503 high demand
           const candidateModels = Array.from(new Set([
-            server.model || 'gemini-2.5-flash',
-            'gemini-2.5-flash',
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
+            server.model || 'gemini-3.8-flash',
+            'gemini-4-argon',
+            'gemini-3.8-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-3.1-flash-lite',
+            'gemini-flash-latest',
           ]));
 
           let lastModelErr: any = null;

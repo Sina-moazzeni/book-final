@@ -82,15 +82,20 @@ export function UserDashboard({
   const handleResumeIncompleteBook = async (b: BookProject) => {
     try {
       setResumingBookId(b.id);
+      const token = user.token || (typeof window !== 'undefined' ? localStorage.getItem('auth_token') : '') || '';
       const res = await fetch(`/api/books/${b.id}/resume-translation`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(user.token ? { Authorization: `Bearer ${user.token}` } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 401) {
+          alert('سشن ورود شما منقضی شده است. لطفاً یک‌بار از حساب خارج شده و مجدداً وارد شوید.');
+          return;
+        }
         if (res.status === 402) {
           alert(data.error || 'موجودی کیف پول شما برای ادامه ترجمه کافی نیست.');
           onOpenWallet();
@@ -99,7 +104,7 @@ export function UserDashboard({
         throw new Error(data.error || 'خطا در برقراری ارتباط با صف ترجمه');
       }
 
-      alert(data.message || 'ادامه ترجمه با موفقیت فعال شد و در صف پردازش ابری قرار گرفت.');
+      alert(data.message || 'ادامه ترجمه با موفقیت فعال شد و بخش‌های ناقص در صف پردازش ابری سرور قرار گرفتند.');
       onRefresh();
     } catch (err: any) {
       alert(`خطا در ادامه ترجمه: ${err.message}`);
@@ -686,16 +691,21 @@ export function UserDashboard({
                       {isAllDone ? (
                         <span className="flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
                           <CheckCircle2 className="w-3 h-3" />
-                          پایان یافته
+                          تکمیل شده (۱۰۰٪)
                         </span>
                       ) : isTranslating ? (
                         <span className="flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 animate-pulse">
                           <RefreshCw className="w-3 h-3 animate-spin" />
                           در حال ترجمه ({percent}٪)
                         </span>
+                      ) : completedChunks > 0 ? (
+                        <span className="flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                          <AlertCircle className="w-3 h-3 text-amber-400" />
+                          ناقص ({percent}٪ - آماده ادامه)
+                        </span>
                       ) : (
                         <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
-                          پیش‌نویس
+                          پیش‌نویس اولیه
                         </span>
                       )}
                     </div>
@@ -765,18 +775,18 @@ export function UserDashboard({
                       <button
                         onClick={() => handleResumeIncompleteBook(book)}
                         disabled={resumingBookId === book.id}
-                        className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-amber-600/20"
-                        title="ادامه ترجمه بخش‌های ترجمه‌نشده و خطادار با چرخش خودکار بین کلیدهای API فعال"
+                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-amber-500/20 active:scale-[0.98] cursor-pointer"
+                        title="ادامه ترجمه خودکار بخش‌های باقی‌مانده و ناقص با چرخش بین مدل‌های Gemini تا ۱۰۰٪ بدون کسر هزینه اضافی"
                       >
                         {resumingBookId === book.id ? (
                           <>
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-950" />
                             <span>در حال ارسال به صف ترجمه سرور...</span>
                           </>
                         ) : (
                           <>
-                            <Sparkles className="w-3.5 h-3.5" />
-                            <span>⚡ ادامه ترجمه ناقص ({totalChunks - completedChunks} بخش باقی‌مانده)</span>
+                            <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                            <span>⚡ ادامه و تکمیل {totalChunks - completedChunks} بخش باقی‌مانده</span>
                           </>
                         )}
                       </button>

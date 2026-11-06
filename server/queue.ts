@@ -705,10 +705,11 @@ ${cleanEnglish}`;
       const candModels = allowAutoSwitch
         ? Array.from(new Set([
             requestedModel,
+            'gemini-4-argon',
             'gemini-3.8-flash',
+            'gemini-3.5-flash-lite',
             'gemini-3.1-flash-lite',
             'gemini-flash-latest',
-            'gemini-2.5-flash',
           ]))
         : [requestedModel];
 
@@ -722,7 +723,7 @@ ${cleanEnglish}`;
               systemInstruction: SYSTEM_INSTRUCTION_TRANSLATOR,
               temperature: 0.35,
               topP: 0.95,
-              thinkingConfig: { thinkingLevel: (m.includes('lite') || m.includes('flash')) ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW },
+              thinkingConfig: { thinkingLevel: m.includes('lite') ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW },
             },
           });
           resultHtml = response.text || '';

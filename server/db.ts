@@ -638,7 +638,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
   security: {
     maintenanceMode: false,
     maxConcurrentJobs: 5,
-    sessionExpireHours: 72,
+    sessionExpireHours: 720,
     ipBlacklist: [],
     rateLimitRpm: 120,
     captcha: {
@@ -1731,7 +1731,7 @@ class Database {
   // --- Session Management ---
   public createSession(userId: string): string {
     const token = crypto.randomBytes(32).toString('hex');
-    const expireHours = this.data.settings.security.sessionExpireHours || 72;
+    const expireHours = this.data.settings?.security?.sessionExpireHours || 720;
     this.data.sessions[token] = {
       userId,
       expiresAt: Date.now() + expireHours * 3600 * 1000,
@@ -1748,6 +1748,13 @@ class Database {
       delete this.data.sessions[token];
       this.saveData(this.data);
       return null;
+    }
+    // Rolling session: renew expiration for active users so they are never disconnected
+    const expireHours = this.data.settings?.security?.sessionExpireHours || 720;
+    const totalLifetimeMs = expireHours * 3600 * 1000;
+    if (session.expiresAt - Date.now() < totalLifetimeMs - 24 * 3600 * 1000) {
+      session.expiresAt = Date.now() + totalLifetimeMs;
+      this.saveData(this.data);
     }
     return this.getUserById(session.userId) || null;
   }

@@ -331,10 +331,11 @@ app.get('/api/status', (req, res) => {
     pool: poolInfo,
     systemInstructionReady: true,
     availableModels: [
-      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (پیش‌فرض هوشمند و فصیح)', recommended: true },
+      { id: 'gemini-4-argon', name: 'Gemini 4 Argon (نهایت عمق فلسفی، ادبی و استدلال پیشرفته)' },
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (پیش‌فرض هوشمند و فصیح ترجمه کتاب)', recommended: true },
+      { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite (پرسرعت، سبک و روان)' },
       { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite (فوق سریع و کم‌مصرف)' },
-      { id: 'gemini-4-argon', name: 'Gemini 4 Argon (نهایت عمق فلسفی و ادبی)' },
-      { id: 'gemini-flash-latest', name: 'Gemini Flash Latest (جدیدترین نسخه)' },
+      { id: 'gemini-flash-latest', name: 'Gemini Flash Latest (جدیدترین نسخه پایدار)' },
     ],
   });
 });
@@ -594,7 +595,7 @@ app.post('/api/keys/test', async (req, res) => {
         config: {
           maxOutputTokens: 20,
           thinkingConfig: {
-            thinkingLevel: candModel.includes('lite') || candModel.includes('flash') ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
+            thinkingLevel: candModel.includes('lite') ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
           },
         },
       });
@@ -950,8 +951,9 @@ ${cleanEnglishText}`;
                   primaryModel,
                   'gemini-3.8-flash',
                   'gemini-3.1-flash-lite',
+                  'gemini-3.5-flash-lite',
+                  'gemini-4-argon',
                   'gemini-flash-latest',
-                  'gemini-2.5-flash',
                 ]))
               : [primaryModel];
 
@@ -959,7 +961,7 @@ ${cleanEnglishText}`;
             for (const candModel of candidateModels) {
               try {
                 const thinkingLevel =
-                  candModel.includes('lite') || candModel.includes('flash')
+                  candModel.includes('lite')
                     ? ThinkingLevel.MINIMAL
                     : ThinkingLevel.LOW;
 
@@ -1242,9 +1244,9 @@ ${cleanEnglishText}`;
           },
         });
 
-        // Use appropriate thinking level for model
+        // Use appropriate thinking level for model (MINIMAL only on lite models; LOW on 3.8 and 4)
         const thinkingLevel =
-          currentModelCandidate.includes('lite') || currentModelCandidate.includes('flash')
+          currentModelCandidate.includes('lite')
             ? ThinkingLevel.MINIMAL
             : ThinkingLevel.LOW;
 

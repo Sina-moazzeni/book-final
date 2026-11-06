@@ -1494,12 +1494,18 @@ ${urls.map((u) => `  <url>
       });
     }
 
-    // Calculate required cost strictly for the remaining untranslated words
+    // Check if this book was already paid for upon creation without a subsequent refund
+    const userTransactions = db.getTransactions(user.id);
+    const initialChargeTx = userTransactions.find(t => t.type === 'charge' && t.description?.includes(book.title));
+    const refundTx = userTransactions.find(t => t.type === 'refund' && t.description?.includes(book.title));
+    const isAlreadyPaid = Boolean(initialChargeTx && !refundTx);
+
+    // Calculate required cost strictly for the remaining untranslated words ONLY IF not already prepaid
     const remainingWords = incompleteChunks.reduce((acc, c) => acc + (c.wordCount || 0), 0);
     const rateInfo = db.getUserEffectiveCostPerWord(user, book.tone);
-    const requiredCost = Math.round(remainingWords * rateInfo.effectiveCostPerWord);
+    const requiredCost = isAlreadyPaid ? 0 : Math.round(remainingWords * rateInfo.effectiveCostPerWord);
 
-    if (!isStaffOrAdmin && user.walletBalance < requiredCost) {
+    if (!isStaffOrAdmin && !isAlreadyPaid && user.walletBalance < requiredCost) {
       return res.status(402).json({
         error: `موجودی کیف پول شما (${user.walletBalance.toLocaleString('fa-IR')} تومان) برای ادامه ترجمه ${incompleteChunks.length} بخش باقی‌مانده (${requiredCost.toLocaleString('fa-IR')} تومان) کافی نیست. لطفاً کیف پول خود را شارژ فرمایید.`,
         requiredAmount: requiredCost,
@@ -1508,8 +1514,8 @@ ${urls.map((u) => `  <url>
       });
     }
 
-    // Deduct only for remaining words if non-privileged
-    if (!isStaffOrAdmin && requiredCost > 0) {
+    // Deduct only for remaining words if non-privileged and not already prepaid
+    if (!isStaffOrAdmin && !isAlreadyPaid && requiredCost > 0) {
       db.addTransaction({
         userId: user.id,
         amount: -requiredCost,

@@ -138,9 +138,11 @@ export const ServerStatusModal: React.FC<ServerStatusModalProps> = ({
   };
 
   const availableModels = status?.availableModels || [
+    { id: 'gemini-4-argon', name: 'Gemini 4 Argon (نهایت عمق فلسفی، ادبی و استدلال برتر)' },
     { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (پیشنهادی / هوشمند و فصیح)', recommended: true },
+    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite (پرسرعت و سبک)' },
     { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite (فوق سریع و کم‌مصرف)' },
-    { id: 'gemini-4-argon', name: 'Gemini 4 Argon (نهایت عمق فلسفی و ادبی)' },
+    { id: 'gemini-flash-latest', name: 'Gemini Flash Latest (جدیدترین نسخه پایدار)' },
   ];
 
   return (
