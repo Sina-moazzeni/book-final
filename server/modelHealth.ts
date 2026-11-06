@@ -56,8 +56,8 @@ export function resolveGeminiCandidateModels(requestedModel?: string, allowAutoS
       return [
         'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
+        'gemini-4-argon',
         'gemini-flash-latest',
-        'gemini-2.5-flash',
         'gemini-3.5-flash-lite',
       ];
     } else {
@@ -66,8 +66,8 @@ export function resolveGeminiCandidateModels(requestedModel?: string, allowAutoS
         'gemini-3.5-flash-lite',
         'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
+        'gemini-4-argon',
         'gemini-flash-latest',
-        'gemini-2.5-flash',
       ];
     }
   }
@@ -75,10 +75,11 @@ export function resolveGeminiCandidateModels(requestedModel?: string, allowAutoS
   // Any other model
   return Array.from(new Set([
     req,
-    'gemini-3.1-flash-lite',
+    'gemini-4-argon',
     'gemini-3.8-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
     'gemini-flash-latest',
-    'gemini-2.5-flash',
   ]));
 }
 

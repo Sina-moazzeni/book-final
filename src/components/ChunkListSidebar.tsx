@@ -49,6 +49,7 @@ export const ChunkListSidebar: React.FC<ChunkListSidebarProps> = ({
 
   const safeChunks = chunks || [];
   const failedCount = safeChunks.filter(c => c.status === 'error' || (!c.translatedHtml && !!c.errorMessage)).length;
+  const incompleteCount = safeChunks.filter(c => !c.translatedHtml || c.translatedHtml.trim().length === 0).length;
 
   const filteredChunks = safeChunks.filter(c => {
     if (filter === 'completed' && !c.translatedHtml) return false;
@@ -141,22 +142,26 @@ export const ChunkListSidebar: React.FC<ChunkListSidebarProps> = ({
           )}
         </div>
 
-        {/* Retry Failed Chunks Quick Banner */}
-        {failedCount > 0 && onRetryFailedChunks && (
+        {/* Retry Failed / Incomplete Chunks Quick Banner */}
+        {incompleteCount > 0 && onRetryFailedChunks && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-xs text-amber-300">
+            <div className="flex items-center gap-1.5 text-xs text-amber-300 min-w-0">
               <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="font-medium">{failedCount} بخش به دلیل اتمام سهمیه یا خطای سرور ناقص ماند</span>
+              <span className="font-medium truncate">
+                {failedCount > 0
+                  ? `${failedCount} بخش خطادار و ${incompleteCount} بخش ناقص باقی‌مانده`
+                  : `${incompleteCount} بخش ترجمه‌نشده در این کتاب باقی‌مانده`}
+              </span>
             </div>
             <button
               type="button"
               onClick={onRetryFailedChunks}
               disabled={isBatchTranslating}
-              className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 disabled:opacity-50 text-slate-950 text-[11px] font-bold flex items-center gap-1 shadow-sm transition shrink-0"
-              title="ادامه ترجمه بخش‌های ناقص با چرخش خودکار بین توکن‌ها تا تکمیل ۱۰۰٪"
+              className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 text-slate-950 text-[11px] font-extrabold flex items-center gap-1 shadow-sm transition shrink-0 active:scale-95 cursor-pointer disabled:opacity-50"
+              title="ادامه خودکار ترجمه بخش‌های باقی‌مانده و ناقص با چرخش بین مدل‌های Gemini تا تکمیل ۱۰۰٪"
             >
               <RotateCw className="w-3 h-3" />
-              <span>⚡ ادامه ترجمه ناقص</span>
+              <span>⚡ ادامه و تکمیل ({incompleteCount})</span>
             </button>
           </div>
         )}

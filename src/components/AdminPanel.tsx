@@ -103,14 +103,14 @@ export type AdminTab =
   | 'guides';
 
 export const PROVIDER_PRESET_MODELS: Record<string, string[]> = {
-  gemini: ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+  gemini: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest'],
   glm: ['glm-4-plus', 'glm-4-0520', 'glm-4-air', 'glm-4-airx', 'glm-4-flash', 'glm-zero-preview'],
   minimax: ['MiniMax-Text-01', 'abab6.5s-chat', 'abab6.5t-chat', 'abab5.5-chat'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini', 'gpt-4-turbo'],
   claude: ['anthropic/claude-3.5-sonnet', 'anthropic/claude-3-7-sonnet', 'anthropic/claude-3-5-haiku'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
-  openrouter: ['google/gemini-2.5-flash', 'deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct'],
-  proxy: ['gpt-4o', 'deepseek-chat', 'claude-3-5-sonnet', 'gemini-2.5-flash'],
+  openrouter: ['deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct'],
+  proxy: ['gpt-4o', 'deepseek-chat', 'claude-3-5-sonnet'],
   custom: ['custom-model'],
 };
 
@@ -4827,10 +4827,11 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                       onChange={(e) => setBatchTargetModel(e.target.value)}
                       className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-mono"
                     >
+                      <option value="gemini-4-argon">Gemini 4 Argon (نهایت عمق فلسفی، ادبی و استدلال برتر)</option>
+                      <option value="gemini-3.8-flash">Gemini 3.8 Flash (هوشمند، استاندارد و با کیفیت کتاب)</option>
+                      <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (پرسرعت، سبک و روان)</option>
                       <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (فوق سریع، پایدار و کم‌مصرف)</option>
-                      <option value="gemini-3.8-flash">Gemini 3.8 Flash (هوشمند، استاندارد و با کیفیت)</option>
                       <option value="gemini-flash-latest">Gemini Flash Latest (آخرین نگارش پایدار فلش)</option>
-                      <option value="gemini-2.5-flash">Gemini 2.5 Flash (پشتیبان نسل ۲)</option>
                     </select>
                     <button
                       type="button"
@@ -5530,10 +5531,10 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                           {batchKeyForm.provider === 'gemini' && (
                             <div className="flex flex-wrap gap-1.5 pt-1">
                               {[
-                                { id: 'gemini-3.5-flash-lite', label: '3.5 Flash Lite ⚡' },
+                                { id: 'gemini-4-argon', label: '4 Argon 🧠' },
                                 { id: 'gemini-3.8-flash', label: '3.8 Flash 🚀' },
-                                { id: 'gemini-3.1-flash-lite', label: '3.1 Flash Lite' },
-                                { id: 'gemini-2.5-flash', label: '2.5 Flash' },
+                                { id: 'gemini-3.5-flash-lite', label: '3.5 Flash Lite ⚡' },
+                                { id: 'gemini-3.1-flash-lite', label: '3.1 Flash Lite 🛡️' },
                               ].map((btn) => (
                                 <button
                                   key={btn.id}

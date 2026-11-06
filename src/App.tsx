@@ -259,18 +259,25 @@ export default function App() {
       })
         .then((res) => {
           if (res.ok) return res.json();
-          throw new Error('Session invalid');
+          if (res.status === 401) throw new Error('Session invalid');
+          throw new Error('Server temporarily unavailable');
         })
         .then((data) => {
-          setCurrentUser(data.user);
+          // Retain token on currentUser so all downstream calls have access to it
+          setCurrentUser({ ...data.user, token: storedToken });
           setAuthToken(storedToken);
           fetchUserBooks(storedToken);
           fetchActiveJobs(storedToken);
         })
-        .catch(() => {
-          localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
-          setAuthToken(null);
-          setCurrentUser(null);
+        .catch((err) => {
+          if (err.message === 'Session invalid') {
+            console.warn('[Auth] Session was rejected by server, clearing token.');
+            localStorage.removeItem(STORAGE_KEY_AUTH_TOKEN);
+            setAuthToken(null);
+            setCurrentUser(null);
+          } else {
+            console.warn('[Auth] Transient server check error, retaining session state:', err.message);
+          }
         })
         .finally(() => setIsAuthLoading(false));
     } else {
@@ -1012,9 +1019,10 @@ export default function App() {
     handleUpdateProject({ ...project, chunks: updatedChunks });
 
     try {
+      const effectiveToken = authToken || (typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_AUTH_TOKEN) : '') || currentUser?.token || '';
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (currentUser?.token) {
-        headers['Authorization'] = `Bearer ${currentUser.token}`;
+      if (effectiveToken) {
+        headers['Authorization'] = `Bearer ${effectiveToken}`;
       }
 
       const res = await fetch('/api/translate', {
