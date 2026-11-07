@@ -6,6 +6,7 @@ export type ConnectionMode = 'auto' | 'direct' | 'server';
 export const STORAGE_CONNECTION_MODE = 'persian_book_translator_connection_mode_v1';
 export const STORAGE_CUSTOM_BACKEND_URL = 'persian_book_translator_custom_backend_url_v1';
 export const STORAGE_CLIENT_KEYS = 'persian_book_translator_client_keys_v1';
+let clientGemini35OverloadUntil = 0;
 
 export function getClientGeminiKeys(): string[] {
   try {
@@ -518,14 +519,24 @@ ${cleanEnglishText}`;
           }
 
           // Candidate models with fast fallback if 503 high demand
-          const candidateModels = Array.from(new Set([
-            server.model || 'gemini-3.8-flash',
-            'gemini-4-argon',
-            'gemini-3.8-flash',
-            'gemini-3.5-flash-lite',
-            'gemini-3.1-flash-lite',
-            'gemini-flash-latest',
-          ]));
+          const reqModel = server.model || 'gemini-3.1-flash-lite';
+          const is35 = reqModel.includes('3.5');
+          const is35Overloaded = is35 && Date.now() < clientGemini35OverloadUntil;
+
+          const candidateModels = is35Overloaded
+            ? [
+                'gemini-3.1-flash-lite',
+                'gemini-3.8-flash',
+                'gemini-flash-latest',
+                'gemini-3.5-flash-lite',
+              ]
+            : Array.from(new Set([
+                reqModel,
+                'gemini-3.1-flash-lite',
+                'gemini-3.8-flash',
+                'gemini-flash-latest',
+                'gemini-3.5-flash-lite',
+              ]));
 
           let lastModelErr: any = null;
           for (const candModel of candidateModels) {
@@ -552,7 +563,10 @@ ${cleanEnglishText}`;
               const data = await res.json();
               if (!res.ok) {
                 const errMsg = data?.error?.message || `خطای HTTP ${res.status}`;
-                if (errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('404')) {
+                if (errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE') || errMsg.includes('overloaded') || errMsg.includes('404')) {
+                  if (candModel.includes('3.5')) {
+                    clientGemini35OverloadUntil = Date.now() + 60 * 60 * 1000;
+                  }
                   lastModelErr = new Error(errMsg);
                   continue;
                 }
@@ -567,17 +581,21 @@ ${cleanEnglishText}`;
               }
 
               const masked = `${currentKey.slice(0, 4)}...${currentKey.slice(-4)}`;
-              console.log(`[Auto-Switching Direct Client] Success via "${server.name}" using Key ${masked}`);
+              console.log(`[Auto-Switching Direct Client] Success via "${server.name}" (Model: ${candModel}) using Key ${masked}`);
 
               return {
                 translatedHtml: restoreImages(sanitizeTranslatedHtml(rawHtml), imagePlaceholderMap),
-                serverUsed: `${server.name}${isSwitch ? ' (سوئیچ خودکار)' : ''}`,
+                serverUsed: `${server.name}${isSwitch || candModel !== reqModel ? ` (مدل کمکی: ${candModel})` : ''}`,
                 modelUsed: candModel,
-                switchOccurred: isSwitch,
+                switchOccurred: isSwitch || candModel !== reqModel,
               };
             } catch (mErr: any) {
               lastModelErr = mErr;
-              if (mErr.message?.includes('503') || mErr.message?.includes('high demand')) {
+              const msg = mErr?.message || '';
+              if (msg.includes('503') || msg.includes('high demand') || msg.includes('UNAVAILABLE') || msg.includes('overloaded')) {
+                if (candModel.includes('3.5')) {
+                  clientGemini35OverloadUntil = Date.now() + 60 * 60 * 1000;
+                }
                 continue;
               }
               throw mErr;

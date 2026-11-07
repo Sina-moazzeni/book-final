@@ -1,4 +1,4 @@
-import { db, BookRecord } from './db.ts';
+import { db, type BookRecord } from './db.ts';
 
 export interface EstablishedTerm {
   en: string;

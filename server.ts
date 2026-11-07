@@ -963,18 +963,8 @@ ${cleanEnglishText}`;
               },
             });
 
-            const allowAutoSwitch = db.getSettings().keyPoolSettings?.allowAutoSwitchOnTranslationFailure !== false;
-            const primaryModel = server.model || 'gemini-3.8-flash';
-            const candidateModels = allowAutoSwitch
-              ? Array.from(new Set([
-                  primaryModel,
-                  'gemini-3.8-flash',
-                  'gemini-3.1-flash-lite',
-                  'gemini-3.5-flash-lite',
-                  'gemini-4-argon',
-                  'gemini-flash-latest',
-                ]))
-              : [primaryModel];
+            const primaryModel = server.model || 'gemini-3.1-flash-lite';
+            const candidateModels = resolveGeminiCandidateModels(primaryModel, true);
 
             let lastCandErr: any = null;
             for (const candModel of candidateModels) {
@@ -1008,7 +998,7 @@ ${cleanEnglishText}`;
                 return res.json({
                   chunkId,
                   translatedHtml: restoreImages(cleanHtml, imagePlaceholderMap),
-                  serverUsed: `${server.name}${isSwitch ? ' (سوئیچ خودکار)' : ''}`,
+                  serverUsed: `${server.name}${isSwitch || candModel !== primaryModel ? ` (مدل کمکی: ${candModel})` : ''}`,
                   serverId: server.id,
                   model: candModel,
                   provider: 'gemini',
@@ -1019,13 +1009,24 @@ ${cleanEnglishText}`;
               } catch (mErr: any) {
                 lastCandErr = mErr;
                 const mMsg = String(mErr?.message || mErr);
+                const is503 =
+                  mMsg.includes('503') ||
+                  mMsg.includes('high demand') ||
+                  mMsg.includes('UNAVAILABLE') ||
+                  mMsg.includes('The model is overloaded') ||
+                  mMsg.includes('overloaded');
+
+                if (is503) {
+                  markGemini35HighDemand();
+                  console.warn(`[Auto-Switching Engine] ⚠️ Model ${candModel} returned 503. Instantly failing over to next healthy candidate model on SAME key...`);
+                  await new Promise(r => setTimeout(r, 400));
+                  continue;
+                }
+
                 const isTransientOrQuota =
                   mMsg.includes('504') ||
                   mMsg.includes('DEADLINE_EXCEEDED') ||
                   mMsg.includes('Deadline expired') ||
-                  mMsg.includes('503') ||
-                  mMsg.includes('high demand') ||
-                  mMsg.includes('UNAVAILABLE') ||
                   mMsg.includes('404') ||
                   mMsg.includes('timeout') ||
                   mMsg.includes('ETIMEDOUT') ||
@@ -1035,9 +1036,10 @@ ${cleanEnglishText}`;
                   mMsg.includes('limit: 500') ||
                   mMsg.includes('limit exceeded') ||
                   mMsg.includes('rate-limits');
+
                 if (isTransientOrQuota) {
                   console.warn(`[Auto-Switching Engine] Quota/Transient error (${mMsg.slice(0, 100)}) on ${candModel}. Automatically trying fallback candidate model...`);
-                  await new Promise(r => setTimeout(r, 1000));
+                  await new Promise(r => setTimeout(r, 600));
                   continue;
                 }
                 throw mErr;

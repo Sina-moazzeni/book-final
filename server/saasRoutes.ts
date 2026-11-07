@@ -1,6 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
-import { db, User, BookRecord, BookChunkRecord, TranslationJob, TransactionRecord, ApiKeyConfig, DEFAULT_ROBOTS_TXT, DEFAULT_LLMS_TXT } from './db.ts';
+import { db, type User, type BookRecord, type BookChunkRecord, type TranslationJob, type TransactionRecord, type ApiKeyConfig, DEFAULT_ROBOTS_TXT, DEFAULT_LLMS_TXT } from './db.ts';
 import { queueManager, keyExclusiveBookLocks } from './queue.ts';
 import { GoogleGenAI } from '@google/genai';
 import { sendRealOtpSms } from './smsService.ts';
