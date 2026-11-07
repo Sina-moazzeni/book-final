@@ -1,6 +1,7 @@
-import { db, TranslationJob, BookRecord, ApiKeyConfig } from './db.ts';
+import { db, type TranslationJob, type BookRecord, type ApiKeyConfig } from './db.ts';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { bookCacheManager } from './bookCacheManager.ts';
+import { resolveGeminiCandidateModels, markGemini35HighDemand } from './modelHealth.ts';
 
 // System prompt as specified in the brief + strict no-summarization & continuity
 const SYSTEM_INSTRUCTION_TRANSLATOR = `Role & Objective:
@@ -672,18 +673,41 @@ export class QueueManager {
             break;
           }
 
-          // Temporary rate limit (429) or transient 503/504
+          const is503Overload =
+            errMsg.includes('503') ||
+            errMsg.includes('high demand') ||
+            errMsg.includes('UNAVAILABLE') ||
+            errMsg.includes('The model is overloaded') ||
+            errMsg.includes('overloaded');
+
+          if (is503Overload) {
+            markGemini35HighDemand();
+            console.warn(`[DedicatedWorker] ⚠️ Google Model 503 Overload on "${currentKey.name}". Key is healthy, model traffic is high.`);
+            currentKey.lastError = 'ترافیک بالای موقت سرور گوگل (503 Overloaded - سوئیچ هوشمند به مدل فعال)';
+            currentKey.cooldownUntil = 0; // Key is healthy, do NOT lock into cooldown!
+            db.saveApiKey(currentKey);
+            if (retry < maxRetriesOnSameKey - 1) {
+              await new Promise((r) => setTimeout(r, 1500));
+              continue;
+            } else {
+              shouldSwitchKey = true;
+              break;
+            }
+          }
+
+          // Temporary rate limit (429) or transient 504/timeout
           if (retry < maxRetriesOnSameKey - 1) {
             const backoffDelay = (retry + 1) * 8000; // 8s, 16s
             console.log(`[DedicatedWorker] Key "${currentKey.name}" temporary rate limit. Pausing ${backoffDelay / 1000}s on SAME key...`);
             currentKey.cooldownUntil = Date.now() + backoffDelay;
+            currentKey.lastError = 'محدودیت تعداد درخواست در دقیقه (Rate Limit 429)';
             db.saveApiKey(currentKey);
             await new Promise((r) => setTimeout(r, backoffDelay));
           } else {
             // Failed all 3 retries on this key, mark temporary cooldown and switch
             console.warn(`[DedicatedWorker] Key "${currentKey.name}" failed ${maxRetriesOnSameKey} retries. Switching to next key...`);
             currentKey.cooldownUntil = Date.now() + 60000;
-            currentKey.lastError = 'محدودیت تعداد درخواست در دقیقه (Rate Limit 429 / 503)';
+            currentKey.lastError = 'محدودیت تعداد درخواست در دقیقه (Rate Limit 429)';
             db.saveApiKey(currentKey);
             shouldSwitchKey = true;
           }
@@ -909,18 +933,9 @@ ${cleanEnglish}`;
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' }, timeout: 55000 },
       });
 
-      const allowAutoSwitch = db.getSettings().keyPoolSettings?.allowAutoSwitchOnTranslationFailure !== false;
-      const requestedModel = keyConfig.model || 'gemini-3.8-flash';
-      const candModels = allowAutoSwitch
-        ? Array.from(new Set([
-            requestedModel,
-            'gemini-4-argon',
-            'gemini-3.8-flash',
-            'gemini-3.5-flash-lite',
-            'gemini-3.1-flash-lite',
-            'gemini-flash-latest',
-          ]))
-        : [requestedModel];
+      const requestedModel = keyConfig.model || 'gemini-3.1-flash-lite';
+      // When 503 or transient overload occurs, ALWAYS resolve candidate models
+      const candModels = resolveGeminiCandidateModels(requestedModel, true);
 
       let lastErr: any = null;
       for (const m of candModels) {
@@ -936,17 +951,32 @@ ${cleanEnglish}`;
             },
           });
           resultHtml = response.text || '';
+          if (m !== requestedModel) {
+            console.log(`[QueueWorker] ✨ Auto-Failover Success! Translated with ${m} instead of overloaded ${requestedModel}`);
+          }
           break;
         } catch (mErr: any) {
           lastErr = mErr;
           const msg = String(mErr?.message || mErr);
+          const is503 =
+            msg.includes('503') ||
+            msg.includes('high demand') ||
+            msg.includes('UNAVAILABLE') ||
+            msg.includes('The model is overloaded') ||
+            msg.includes('overloaded');
+
+          if (is503) {
+            markGemini35HighDemand();
+            console.warn(`[QueueWorker] ⚠️ Model ${m} is overloaded (503). Instantly trying next healthy candidate model on SAME key...`);
+            await new Promise(r => setTimeout(r, 400));
+            continue;
+          }
+
           const isTransient =
             msg.includes('504') ||
             msg.includes('DEADLINE_EXCEEDED') ||
             msg.includes('Deadline expired') ||
-            msg.includes('503') ||
             msg.includes('404') ||
-            msg.includes('UNAVAILABLE') ||
             msg.includes('timeout') ||
             msg.includes('ETIMEDOUT') ||
             msg.includes('429') ||
@@ -955,9 +985,10 @@ ${cleanEnglish}`;
             msg.includes('limit: 500') ||
             msg.includes('limit exceeded') ||
             msg.includes('rate-limits');
+
           if (isTransient) {
-            console.warn(`[QueueWorker] Transient or Quota error on ${m}: ${msg.slice(0, 100)}. Trying fallback model...`);
-            await new Promise(r => setTimeout(r, 1200));
+            console.warn(`[QueueWorker] Transient error on ${m}: ${msg.slice(0, 100)}. Trying fallback candidate model...`);
+            await new Promise(r => setTimeout(r, 600));
             continue;
           }
           throw mErr;

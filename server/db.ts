@@ -796,7 +796,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
     googleClientSecret: '',
   },
   keyPoolSettings: {
-    allowAutoSwitchOnTranslationFailure: false, // Default false: no automatic model switch during translation
+    allowAutoSwitchOnTranslationFailure: true, // Auto-failover enabled when Gemini model reports 503 overload
     allowAutoSwitchOnTest: true,
     preferredFallbackModel: 'gemini-3.1-flash-lite',
   },

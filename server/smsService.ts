@@ -1,4 +1,4 @@
-import { SystemSettings } from './db.ts';
+import type { SystemSettings } from './db.ts';
 
 export interface SendSmsResult {
   success: boolean;
