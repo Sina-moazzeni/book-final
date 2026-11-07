@@ -12,6 +12,7 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { Document, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Packer, BorderStyle, Header, Footer, PageNumber } from 'docx';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
+import sharp from 'sharp';
 import { BOOK_THEMES } from './src/constants/themes.ts';
 import { setupSaasRoutes } from './server/saasRoutes.ts';
 import { db } from './server/db.ts';
@@ -1578,137 +1579,116 @@ app.post('/api/import/file', async (req, res) => {
 
     } else if (detectedType === 'pdf') {
       let pdfParsedSuccessfully = false;
-
-      // Professional, uncropped PDF image extraction & page mapping
-      const latinText = buffer.toString('latin1');
-      const objMap = new Map<number, string>();
-      const allExtractedImages: string[] = [];
-      const pageImageMap = new Map<number, string[]>();
-
-      // 1. Extract intact Image XObjects using declared stream /Length
-      const objRegex = /(\d+)\s+0\s+obj\s*<<([\s\S]*?\/Subtype\s*\/Image[\s\S]*?)>>\s*stream[\r\n]+/g;
-      let m: RegExpExecArray | null;
-      while ((m = objRegex.exec(latinText)) !== null) {
-        const objId = parseInt(m[1], 10);
-        const dict = m[2];
-        const streamStart = m.index + m[0].length;
-        const lenMatch = dict.match(/\/Length\s+(\d+)/);
-
-        if (lenMatch) {
-          const len = parseInt(lenMatch[1], 10);
-          if (len > 3500 && streamStart + len <= buffer.length) {
-            const slice = buffer.subarray(streamStart, streamStart + len);
-            if (dict.includes('/DCTDecode') && slice[0] === 0xFF && slice[1] === 0xD8) {
-              const dataUrl = 'data:image/jpeg;base64,' + slice.toString('base64');
-              objMap.set(objId, dataUrl);
-              allExtractedImages.push(dataUrl);
-            }
-          }
-        }
-      }
-
-      // 2. Safe SOS-aware JPEG scanner for standalone embedded JPEGs (never cuts midway through image)
-      let offset = 0;
-      while (offset < buffer.length - 16) {
-        if (buffer[offset] === 0xFF && buffer[offset + 1] === 0xD8 && buffer[offset + 2] === 0xFF) {
-          let cur = offset + 2;
-          let valid = false;
-          while (cur < buffer.length - 4) {
-            if (buffer[cur] === 0xFF) {
-              const marker = buffer[cur + 1];
-              if (marker === 0xD9) { // Genuine EOI
-                cur += 2;
-                valid = true;
-                break;
-              } else if (marker === 0xDA) { // SOS (Start of Scan) - step through scan data
-                cur += 2;
-                const sosLen = (buffer[cur] << 8) | buffer[cur + 1];
-                cur += sosLen;
-                while (cur < buffer.length - 1) {
-                  if (buffer[cur] === 0xFF) {
-                    if (buffer[cur + 1] === 0xD9) {
-                      cur += 2;
-                      valid = true;
-                      break;
-                    } else if (buffer[cur + 1] === 0x00 || (buffer[cur + 1] >= 0xD0 && buffer[cur + 1] <= 0xD7)) {
-                      cur += 2;
-                    } else {
-                      cur++;
-                    }
-                  } else {
-                    cur++;
-                  }
-                }
-                break;
-              } else if (marker !== 0x00 && marker !== 0xFF) {
-                const segLen = (buffer[cur + 2] << 8) | buffer[cur + 3];
-                cur += 2 + segLen;
-              } else {
-                cur++;
-              }
-            } else {
-              cur++;
-            }
-          }
-          if (valid && (cur - offset) > 4000) {
-            const slice = buffer.subarray(offset, cur);
-            const dataUrl = 'data:image/jpeg;base64,' + slice.toString('base64');
-            if (!allExtractedImages.includes(dataUrl)) {
-              allExtractedImages.push(dataUrl);
-            }
-            offset = cur;
-            continue;
-          }
-        }
-        offset++;
-      }
-
-      // 3. Map page XObjects to exact page numbers
-      const pageRegex = /\/Type\s*\/Page\b[\s\S]*?>>/g;
-      let pIdx = 1;
-      let pMatch: RegExpExecArray | null;
-      while ((pMatch = pageRegex.exec(latinText)) !== null) {
-        const pageDict = pMatch[0];
-        const xMatches = pageDict.match(/\/([A-Za-z0-9_]+)\s+(\d+)\s+0\s+R/g);
-        if (xMatches) {
-          const pageImgs: string[] = [];
-          const seenIds = new Set<number>();
-          for (const xm of xMatches) {
-            const numM = xm.match(/\s+(\d+)\s+0\s+R/);
-            if (numM) {
-              const id = parseInt(numM[1], 10);
-              if (objMap.has(id) && !seenIds.has(id)) {
-                seenIds.add(id);
-                const dataUrl = objMap.get(id)!;
-                if (!pageImgs.includes(dataUrl)) {
-                  pageImgs.push(dataUrl);
-                }
-              }
-            }
-          }
-          if (pageImgs.length > 0) {
-            pageImageMap.set(pIdx, pageImgs);
-          }
-        }
-        pIdx++;
-      }
-
-      totalImagesCount = allExtractedImages.length;
-      let globalChunkCounter = 1;
-      let fallbackImgIdx = 0;
       let numPages = 0;
+      let globalChunkCounter = 1;
+
+      // Helper to process raw PDF image bitmaps with sharp:
+      // 1. Rejects tiny icons, spacers, dots, and separator hair lines (<60px or extreme ratio)
+      // 2. Rejects solid white / blank background masks (mean > 240 and stdev < 3.0, or mean > 252)
+      // 3. Normalizes CMYK and DeviceGray colorspaces to standard sRGB (prevents browser white/inverted boxes)
+      // 4. Preserves soft masks (/SMask) for alpha transparency
+      // 5. Compresses cleanly to web-ready JPEG/PNG under 1400px
+      const processRawPdfImage = async (imgObj: {
+        width?: number;
+        height?: number;
+        kind?: number;
+        data?: any;
+        smask?: any;
+      }): Promise<string | null> => {
+        if (!imgObj || !imgObj.width || !imgObj.height || !imgObj.data) {
+          return null;
+        }
+        const width = imgObj.width;
+        const height = imgObj.height;
+
+        if (width < 60 || height < 60) return null;
+        if (width / height > 22 || height / width > 22) return null;
+
+        let channels: 1 | 3 | 4 = 3;
+        if (imgObj.kind === 1) {
+          channels = 1; // Grayscale
+        } else if (imgObj.kind === 3) {
+          channels = 4; // RGBA
+        } else {
+          const totalPixels = width * height;
+          const len = imgObj.data.length || imgObj.data.byteLength || 0;
+          if (len === totalPixels) channels = 1;
+          else if (len === totalPixels * 3) channels = 3;
+          else if (len === totalPixels * 4) channels = 4;
+          else channels = 3;
+        }
+
+        try {
+          let rawBuffer = Buffer.from(
+            imgObj.data.buffer || imgObj.data,
+            imgObj.data.byteOffset || 0,
+            imgObj.data.byteLength || imgObj.data.length
+          );
+
+          if (channels === 3 && imgObj.smask && imgObj.smask.data && imgObj.smask.data.length === width * height) {
+            const rgba = Buffer.alloc(width * height * 4);
+            const alpha = imgObj.smask.data;
+            for (let i = 0; i < width * height; i++) {
+              rgba[i * 4] = rawBuffer[i * 3];
+              rgba[i * 4 + 1] = rawBuffer[i * 3 + 1];
+              rgba[i * 4 + 2] = rawBuffer[i * 3 + 2];
+              rgba[i * 4 + 3] = alpha[i];
+            }
+            rawBuffer = rgba;
+            channels = 4;
+          }
+
+          if (rawBuffer.length < width * height * channels) {
+            return null;
+          }
+
+          const image = sharp(rawBuffer, {
+            raw: {
+              width,
+              height,
+              channels,
+            },
+          });
+
+          const stats = await image.stats();
+          // Filter out solid white masks, blank background boxes, and empty spacers
+          const isSolidWhite = stats.channels.every(c => c.mean > 240 && c.stdev < 3.0);
+          const isExtremeWhite = stats.channels.every(c => c.mean > 252);
+          if (isSolidWhite || isExtremeWhite) {
+            return null;
+          }
+
+          let pipeline = image.toColorspace('srgb');
+          if (width > 1400 || height > 1400) {
+            pipeline = pipeline.resize(1400, 1400, { fit: 'inside', withoutEnlargement: true });
+          }
+
+          let outBuf: Buffer;
+          let mime = 'image/jpeg';
+          if (channels === 4) {
+            outBuf = await pipeline.png({ quality: 85, compressionLevel: 7 }).toBuffer();
+            mime = 'image/png';
+          } else {
+            outBuf = await pipeline.jpeg({ quality: 85, mozjpeg: true }).toBuffer();
+          }
+
+          return `data:${mime};base64,` + outBuf.toString('base64');
+        } catch {
+          return null;
+        }
+      };
 
       // Helper to render figure HTML for embedded images
       const formatImageFigure = (imgSrc: string, pageNum: number, imgNum: number) => {
         return `\n<figure class="book-illustration-figure my-8 text-center" style="page-break-inside: avoid; break-inside: avoid;">
-  <div class="inline-block p-2.5 rounded-2xl bg-white shadow-md border border-slate-200 max-w-full">
-    <img src="${imgSrc}" class="book-embedded-image rounded-xl max-h-[500px] max-w-full mx-auto object-contain block" alt="تصویر صفحه ${pageNum} کتاب" />
+  <div class="inline-block p-2 rounded-2xl bg-slate-900/40 border border-slate-700/60 shadow-lg max-w-full overflow-hidden">
+    <img src="${imgSrc}" class="book-embedded-image rounded-xl max-h-[520px] max-w-full mx-auto object-contain block bg-transparent" alt="تصویر صفحه ${pageNum} کتاب" />
   </div>
-  <figcaption class="text-xs text-slate-500 mt-2 font-medium">تصویر ${imgNum} - صفحه ${pageNum}</figcaption>
+  <figcaption class="text-xs text-slate-400 mt-2 font-medium">تصویر ${imgNum} - صفحه ${pageNum}</figcaption>
 </figure>`;
       };
 
-      // Method 1: pdfjs-dist via dynamic import
+      // Method 1: High-fidelity pdfjs-dist extraction with precise per-page operator image mapping
       try {
         const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
         const uint8Data = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -1742,12 +1722,81 @@ app.post('/api/import/file', async (req, res) => {
             const pageText = pageLines.join('\n\n');
             const words = pageText.split(/\s+/).filter(Boolean).length;
 
-            // Resolve images for this exact page with strict deduplication
-            const rawPageImages = pageImageMap.get(pageNum) || [];
-            if (rawPageImages.length === 0 && pageImageMap.size === 0 && fallbackImgIdx < allExtractedImages.length) {
-              rawPageImages.push(allExtractedImages[fallbackImgIdx++]);
+            // Extract genuine, non-white images strictly for THIS specific page
+            const thisPageImages: string[] = [];
+            const seenImageFingerprints = new Set<string>();
+
+            try {
+              const ops = await page.getOperatorList();
+              for (let i = 0; i < ops.fnArray.length; i++) {
+                const fn = ops.fnArray[i];
+                if (fn === pdfjsLib.OPS.paintImageXObject) {
+                  const imgKey = ops.argsArray[i]?.[0];
+                  if (!imgKey) continue;
+
+                  const rawImgObj = await new Promise<any>((resolve) => {
+                    let finished = false;
+                    const timer = setTimeout(() => {
+                      if (!finished) {
+                        finished = true;
+                        resolve(null);
+                      }
+                    }, 3500);
+
+                    try {
+                      if (page.objs && typeof page.objs.get === 'function') {
+                        page.objs.get(imgKey, (data: any) => {
+                          if (!finished) {
+                            finished = true;
+                            clearTimeout(timer);
+                            resolve(data);
+                          }
+                        });
+                      } else if (page.commonObjs && typeof page.commonObjs.get === 'function') {
+                        page.commonObjs.get(imgKey, (data: any) => {
+                          if (!finished) {
+                            finished = true;
+                            clearTimeout(timer);
+                            resolve(data);
+                          }
+                        });
+                      } else {
+                        clearTimeout(timer);
+                        resolve(null);
+                      }
+                    } catch {
+                      clearTimeout(timer);
+                      resolve(null);
+                    }
+                  });
+
+                  if (rawImgObj) {
+                    const dataUrl = await processRawPdfImage(rawImgObj);
+                    if (dataUrl) {
+                      const fp = dataUrl.slice(0, 200) + dataUrl.length;
+                      if (!seenImageFingerprints.has(fp)) {
+                        seenImageFingerprints.add(fp);
+                        thisPageImages.push(dataUrl);
+                      }
+                    }
+                  }
+                } else if (fn === pdfjsLib.OPS.paintInlineImageXObject) {
+                  const inlineObj = ops.argsArray[i]?.[0];
+                  if (inlineObj) {
+                    const dataUrl = await processRawPdfImage(inlineObj);
+                    if (dataUrl) {
+                      const fp = dataUrl.slice(0, 200) + dataUrl.length;
+                      if (!seenImageFingerprints.has(fp)) {
+                        seenImageFingerprints.add(fp);
+                        thisPageImages.push(dataUrl);
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (opsErr) {
+              console.warn(`Could not extract image operators for page ${pageNum}:`, opsErr);
             }
-            const thisPageImages = Array.from(new Set(rawPageImages));
 
             if (words === 0 && thisPageImages.length === 0) continue;
 
@@ -1770,7 +1819,7 @@ app.post('/api/import/file', async (req, res) => {
             });
             globalChunkCounter++;
           } catch (pageErr) {
-            console.warn(`Error extracting text from PDF page ${pageNum}:`, pageErr);
+            console.warn(`Error extracting text/images from PDF page ${pageNum}:`, pageErr);
           }
         }
         pdfParsedSuccessfully = true;
@@ -1778,7 +1827,7 @@ app.post('/api/import/file', async (req, res) => {
         console.warn('pdfjs-dist processing failed, falling back to pdf-parse:', pdfjsErr?.message);
       }
 
-      // Method 2: Robust Fallback with pdf-parse if pdfjs-dist failed
+      // Method 2: Fallback with pdf-parse if pdfjs-dist failed
       if (!pdfParsedSuccessfully || chunks.length === 0) {
         try {
           const pdfParseModule = await import('pdf-parse');
@@ -1797,17 +1846,9 @@ app.post('/api/import/file', async (req, res) => {
               const lines = pageContent.split('\n').map((l: string) => l.trim()).filter(Boolean);
               const words = lines.join(' ').split(/\s+/).filter(Boolean).length;
 
-              const thisPageImages = pageImageMap.get(pageNum) || [];
-              if (thisPageImages.length === 0 && pageImageMap.size === 0 && fallbackImgIdx < allExtractedImages.length) {
-                thisPageImages.push(allExtractedImages[fallbackImgIdx++]);
-              }
-
-              if (words === 0 && thisPageImages.length === 0) return;
+              if (words === 0) return;
 
               let pageHtml = lines.map((l: string) => `<p>${l}</p>`).join('\n');
-              thisPageImages.forEach((img, iIdx) => {
-                pageHtml += formatImageFigure(img, pageNum, iIdx + 1);
-              });
 
               chunks.push({
                 id: `chk_${Date.now()}_${globalChunkCounter}`,
@@ -1818,8 +1859,8 @@ app.post('/api/import/file', async (req, res) => {
                 wordCount: Math.max(1, words),
                 estimatedTokens: Math.ceil(words * 1.35),
                 status: 'idle',
-                hasImages: thisPageImages.length > 0,
-                imageCount: thisPageImages.length,
+                hasImages: false,
+                imageCount: 0,
               });
               globalChunkCounter++;
             });
@@ -1830,6 +1871,8 @@ app.post('/api/import/file', async (req, res) => {
           throw new Error(`خطا در پردازش فایل PDF: ${fallbackErr?.message || 'قالب PDF نامعتبر است'}`);
         }
       }
+
+      totalImagesCount = chunks.reduce((acc, c) => acc + (c.imageCount || 0), 0);
 
       // تشخیص هوشمند فایل‌های PDF اسکن‌شده (Scanned PDF Detection)
       const totalPdfExtractedWords = chunks.reduce((sum, c) => sum + (c.wordCount || 0), 0);
@@ -2239,6 +2282,47 @@ app.post('/api/export/docx', async (req, res) => {
       );
     }
 
+    // Helper to calculate proportional image dimensions for Word DOCX
+    const getImageDimensions = (buf: Buffer): { width: number; height: number } => {
+      try {
+        if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
+          const w = buf.readUInt32BE(16);
+          const h = buf.readUInt32BE(20);
+          if (w > 0 && h > 0) return { width: w, height: h };
+        }
+        if (buf.length >= 4 && buf[0] === 0xFF && buf[1] === 0xD8) {
+          let offset = 2;
+          while (offset < buf.length - 8) {
+            if (buf[offset] === 0xFF) {
+              const marker = buf[offset + 1];
+              if ((marker >= 0xC0 && marker <= 0xC3) || (marker >= 0xC5 && marker <= 0xC7) || (marker >= 0xC9 && marker <= 0xCB) || (marker >= 0xCD && marker <= 0xCF)) {
+                const h = buf.readUInt16BE(offset + 5);
+                const w = buf.readUInt16BE(offset + 7);
+                if (w > 0 && h > 0) return { width: w, height: h };
+              }
+              const segLen = buf.readUInt16BE(offset + 2);
+              offset += 2 + segLen;
+            } else {
+              offset++;
+            }
+          }
+        }
+      } catch {}
+      return { width: 440, height: 280 };
+    };
+
+    const getProportionalDocxSize = (buf: Buffer) => {
+      const orig = getImageDimensions(buf);
+      const ratio = orig.width / orig.height;
+      let targetW = Math.min(480, Math.max(160, orig.width));
+      let targetH = Math.round(targetW / ratio);
+      if (targetH > 520) {
+        targetH = 520;
+        targetW = Math.round(targetH * ratio);
+      }
+      return { width: targetW, height: targetH };
+    };
+
     // Page break after title page
     docChildren.push(
       new Paragraph({
@@ -2290,6 +2374,7 @@ app.post('/api/export/docx', async (req, res) => {
                 const base64Data = dataUrl.slice(commaIdx + 1).replace(/\s+/g, '');
                 const imgBuffer = Buffer.from(base64Data, 'base64');
                 const isJpg = dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg');
+                const size = getProportionalDocxSize(imgBuffer);
                 docChildren.push(
                   new Paragraph({
                     alignment: AlignmentType.CENTER,
@@ -2297,10 +2382,7 @@ app.post('/api/export/docx', async (req, res) => {
                     children: [
                       new ImageRun({
                         data: imgBuffer,
-                        transformation: {
-                          width: 440,
-                          height: 280,
-                        },
+                        transformation: size,
                         type: isJpg ? 'jpg' : 'png',
                       } as any),
                     ],
@@ -2327,6 +2409,7 @@ app.post('/api/export/docx', async (req, res) => {
                 const base64Data = dataUrl.slice(commaIdx + 1).replace(/\s+/g, '');
                 const imgBuffer = Buffer.from(base64Data, 'base64');
                 const isJpg = dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg');
+                const size = getProportionalDocxSize(imgBuffer);
                 docChildren.push(
                   new Paragraph({
                     alignment: AlignmentType.CENTER,
@@ -2334,10 +2417,7 @@ app.post('/api/export/docx', async (req, res) => {
                     children: [
                       new ImageRun({
                         data: imgBuffer,
-                        transformation: {
-                          width: 440,
-                          height: 280,
-                        },
+                        transformation: size,
                         type: isJpg ? 'jpg' : 'png',
                       } as any),
                     ],
