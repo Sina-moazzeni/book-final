@@ -85,6 +85,10 @@ export interface ApiKeyItem {
   cooldownUntil: number;
   lastLatencyMs?: number;
   assignedUserId?: string;
+  isSuspended?: boolean;
+  status?: 'active' | 'cooldown' | 'suspended' | 'disabled';
+  lastError?: string;
+  lastUsed?: number;
 }
 
 export interface SystemSettings {
