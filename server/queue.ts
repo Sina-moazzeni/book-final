@@ -78,8 +78,16 @@ function sanitizeTranslatedHtml(html: string): string {
   return clean;
 }
 
-// User-to-Key sticky map to ensure different users get assigned different keys
-const userKeyAssignments = new Map<string, string>();
+// ============================================================================
+// BOOK-DEDICATED KEY LOCKS & EXCLUSIVE MUTUAL EXCLUSION
+// ============================================================================
+// Rule 1: Every book being translated is locked to ONE dedicated API key.
+// Rule 2: Keys in use by other books CANNOT be taken until those books finish.
+// Rule 3: Only when the assigned key is completely exhausted (daily quota) or suspended does the book switch to the next available unlocked key.
+export const bookDedicatedKeys = new Map<string, string>(); // bookId -> keyId
+export const keyExclusiveBookLocks = new Map<string, string>(); // keyId -> bookId
+export const userKeyAssignments = new Map<string, string>();
+
 const activeFailoverReserveKeys = new Set<string>();
 let roundRobinKeyIndex = 0;
 
@@ -93,7 +101,7 @@ const keyLastRequestTime = new Map<string, number>();
 // Safe ceiling: Google Gemini Free tier limit is 15 RPM.
 // 10 RPM provides a safe 33% headroom to strictly prevent ANY 429 errors or quota suspensions.
 const MAX_SAFE_RPM_PER_KEY = 10;
-const MIN_GAP_SAME_KEY_MS = 2500; // at least 2.5s between consecutive calls to the SAME key
+const MIN_GAP_SAME_KEY_MS = 3200; // at least 3.2s between consecutive calls to the SAME key
 
 export function getKeyRpm(keyId: string): number {
   const now = Date.now();
@@ -113,19 +121,94 @@ export function recordKeyRequest(keyId: string) {
 }
 
 /**
- * Builds an intelligently sorted candidate queue of API keys:
- * - Suspended or inactive keys are strictly excluded or placed at the absolute end.
- * - Ready keys with available RPM capacity come FIRST (Tier 1).
- * - Keys near their 10 RPM capacity come SECOND (Tier 2).
- * - Keys currently in cooldown go to the ABSOLUTE END (Tier 3) and are NEVER touched while ready keys exist.
+ * Assigns or retrieves the dedicated API Key for a book with strict mutual exclusion.
+ * - If this book already has an assigned key that is healthy, returns that exact key.
+ * - Other books are prohibited from using this key.
  */
-export function getCandidateKeysQueue(allKeys: ApiKeyConfig[], preferredKeyId?: string): ApiKeyConfig[] {
+export function getOrAssignDedicatedKeyForBook(bookId: string, preferredKeyId?: string): ApiKeyConfig | null {
+  const allKeys = db.getApiKeys();
+  const now = Date.now();
+
+  // 1. If this book already has an assigned dedicated key, stick with it
+  const existingKeyId = preferredKeyId || bookDedicatedKeys.get(bookId);
+  if (existingKeyId) {
+    const existingKey = allKeys.find((k) => k.id === existingKeyId);
+    if (existingKey && existingKey.isActive && !existingKey.isSuspended) {
+      // If key is not in long daily quota cooldown (cooldown < 30s), it remains locked to this book!
+      if (existingKey.cooldownUntil <= now + 30000) {
+        bookDedicatedKeys.set(bookId, existingKey.id);
+        keyExclusiveBookLocks.set(existingKey.id, bookId);
+        return existingKey;
+      }
+    }
+    // Key was suspended or daily quota exhausted: release lock so book can advance to next key
+    keyExclusiveBookLocks.delete(existingKeyId);
+    bookDedicatedKeys.delete(bookId);
+  }
+
+  // 2. Select next available active key that is NOT locked by ANY other book
+  const usable = allKeys.filter((k) => k.isActive && !k.isSuspended);
+  if (usable.length === 0) return null;
+
+  // Mutual exclusion: exclude keys currently locked by other books
+  const unlocked = usable.filter((k) => {
+    const lockedBy = keyExclusiveBookLocks.get(k.id);
+    return !lockedBy || lockedBy === bookId;
+  });
+
+  const candidatePool = unlocked.length > 0 ? unlocked : usable;
+
+  // Prefer ready keys (not in cooldown)
+  const ready = candidatePool.filter((k) => k.cooldownUntil <= now);
+  let selected: ApiKeyConfig;
+
+  if (ready.length > 0) {
+    ready.sort((a, b) => {
+      const rpmA = getKeyRpm(a.id);
+      const rpmB = getKeyRpm(b.id);
+      if (rpmA !== rpmB) return rpmA - rpmB;
+      return (keyLastRequestTime.get(a.id) || 0) - (keyLastRequestTime.get(b.id) || 0);
+    });
+    selected = ready[0];
+  } else {
+    // Pick the key whose cooldown expires soonest
+    candidatePool.sort((a, b) => a.cooldownUntil - b.cooldownUntil);
+    selected = candidatePool[0];
+  }
+
+  // Lock this key exclusively to this book
+  bookDedicatedKeys.set(bookId, selected.id);
+  keyExclusiveBookLocks.set(selected.id, bookId);
+  console.log(`[KeyLock] Assigned dedicated key "${selected.name}" exclusively to book "${bookId}"`);
+  return selected;
+}
+
+export function releaseBookDedicatedKey(bookId: string) {
+  const keyId = bookDedicatedKeys.get(bookId);
+  if (keyId) {
+    keyExclusiveBookLocks.delete(keyId);
+    bookDedicatedKeys.delete(bookId);
+    console.log(`[KeyLock] Released key "${keyId}" from book "${bookId}"`);
+  }
+}
+
+/**
+ * Builds an intelligently sorted candidate queue of API keys for general queries.
+ */
+export function getCandidateKeysQueue(allKeys: ApiKeyConfig[], preferredKeyId?: string, excludeLockedByOtherBooks: boolean = true): ApiKeyConfig[] {
   const now = Date.now();
 
   // Filter out permanently suspended or manually turned-off keys
-  const usable = allKeys.filter((k) => k.isActive && !k.isSuspended);
+  let usable = allKeys.filter((k) => k.isActive && !k.isSuspended);
   if (usable.length === 0) {
     return [];
+  }
+
+  if (excludeLockedByOtherBooks) {
+    const unlocked = usable.filter((k) => !keyExclusiveBookLocks.has(k.id));
+    if (unlocked.length > 0) {
+      usable = unlocked;
+    }
   }
 
   const readyKeys: ApiKeyConfig[] = [];
@@ -161,7 +244,7 @@ export function getCandidateKeysQueue(allKeys: ApiKeyConfig[], preferredKeyId?: 
     }
   }
 
-  // Sort cooling keys: earliest cooldown expiry first (only fallback if all ready keys fail)
+  // Sort cooling keys: earliest cooldown expiry first
   coolingKeys.sort((a, b) => a.cooldownUntil - b.cooldownUntil);
 
   return [...readyKeys, ...rpmBusyKeys, ...coolingKeys];
@@ -285,7 +368,7 @@ export class QueueManager {
           name: k.name,
           provider: k.provider,
           model: k.model,
-          isBusy: Array.from(userKeyAssignments.values()).includes(k.id),
+          isBusy: keyExclusiveBookLocks.has(k.id) || Array.from(userKeyAssignments.values()).includes(k.id),
           isCooldown: k.cooldownUntil > Date.now(),
           latencyMs: k.lastLatencyMs || 0,
         })),
@@ -397,11 +480,7 @@ export class QueueManager {
         this.activeJobIds.add(job.id);
         this.processJob(job).finally(() => {
           this.activeJobIds.delete(job.id);
-          const assigned = userKeyAssignments.get(job.userId);
-          if (assigned) {
-            activeFailoverReserveKeys.delete(assigned);
-          }
-          userKeyAssignments.delete(job.userId);
+          releaseBookDedicatedKey(job.bookId);
         });
       }
     } finally {
@@ -410,11 +489,11 @@ export class QueueManager {
   }
 
   /**
-   * Translates a single text chunk with automatic multi-token failover.
-   * If an API key/token hits 429 quota exhaustion, resource exhaustion, 503/504, or rate limits:
-   * - It puts that key at the VERY END of the line with a cooldown.
-   * - It automatically and instantly switches to the next active token in the pool.
-   * - If a key is suspended/invalid by Google (CONSUMER_SUSPENDED, 403), it disables it permanently so it never interrupts work.
+   * Translates a single text chunk with strict Book-to-Key dedicated mutual exclusion:
+   * Rule 1: Every book gets assigned ONE dedicated key and sticks to it.
+   * Rule 2: Keys locked by other books CANNOT be taken by this book.
+   * Rule 3: If temporary RPM 429/503 occurs, wait and retry on the SAME KEY (do not burn other keys!).
+   * Rule 4: ONLY when the key's daily quota is genuinely exhausted or suspended does it advance to the next available unlocked key.
    */
   public async translateChunkWithFailover(options: {
     englishText: string;
@@ -428,186 +507,194 @@ export class QueueManager {
     modelUsed: string;
     switchOccurred: boolean;
   }> {
-    const userId = options.userId || 'system_direct';
-    const allDbKeys = db.getApiKeys();
-    const assignedKeyId = options.specificKeyId || userKeyAssignments.get(userId);
-
-    // Build strictly prioritized candidate queue
-    const candidateKeys = getCandidateKeysQueue(allDbKeys, assignedKeyId);
-
-    // If no DB keys ready, try fallback environment key
-    if (candidateKeys.length === 0 && process.env.GEMINI_API_KEY) {
-      candidateKeys.push({
-        id: 'env_fallback_key',
-        name: 'Environment Gemini Key',
-        provider: 'gemini',
-        apiKey: process.env.GEMINI_API_KEY.trim(),
-        model: 'gemini-3.1-flash-lite',
-        isActive: true,
-        priority: 1,
-        totalRequests: 0,
-        successfulRequests: 0,
-        failedRequests: 0,
-        totalTokensUsed: 0,
-        todayTokensUsed: 0,
-        rpmCount: 0,
-        cooldownUntil: 0,
-      });
-    }
-
-    if (candidateKeys.length === 0) {
-      throw new Error('هیچ کلید هوش مصنوعی فعال یا سالمی در سرور یافت نشد. لطفاً در پنل مدیریت کلیدهای خود را بررسی کرده یا کلید جدید اضافه فرمایید.');
-    }
-
-    let lastError: any = null;
+    const bookId = options.book.id;
     let switchOccurred = false;
-    let attempts = 0;
-    const maxAttempts = Math.max(3, candidateKeys.length * 2);
+    let lastError: any = null;
 
-    for (let i = 0; i < candidateKeys.length && attempts < maxAttempts; i++) {
-      attempts++;
-      const currentKey = candidateKeys[i];
-      if (i > 0) {
+    const usableKeysCount = db.getApiKeys().filter((k) => k.isActive && !k.isSuspended).length;
+    const maxKeySwitches = Math.max(3, usableKeysCount);
+
+    for (let keySwitchAttempt = 0; keySwitchAttempt < maxKeySwitches; keySwitchAttempt++) {
+      // 1. Get or assign the dedicated key for this book (with mutual exclusion)
+      let currentKey = getOrAssignDedicatedKeyForBook(bookId, keySwitchAttempt === 0 ? options.specificKeyId : undefined);
+
+      if (!currentKey && process.env.GEMINI_API_KEY) {
+        currentKey = {
+          id: 'env_fallback_key',
+          name: 'Environment Gemini Key',
+          provider: 'gemini',
+          apiKey: process.env.GEMINI_API_KEY.trim(),
+          model: 'gemini-3.1-flash-lite',
+          isActive: true,
+          priority: 1,
+          totalRequests: 0,
+          successfulRequests: 0,
+          failedRequests: 0,
+          totalTokensUsed: 0,
+          todayTokensUsed: 0,
+          rpmCount: 0,
+          cooldownUntil: 0,
+        };
+      }
+
+      if (!currentKey) {
+        throw new Error('هیچ کلید هوش مصنوعی فعال یا بدون استفاده در سرور یافت نشد. لطفاً در پنل مدیریت کلید جدید اضافه فرمایید.');
+      }
+
+      if (keySwitchAttempt > 0) {
         switchOccurred = true;
       }
 
-      try {
-        // Enforce safe RPM spacing on this specific key to guarantee no 429 burst errors
-        const lastUsedTime = keyLastRequestTime.get(currentKey.id) || 0;
-        const gap = Date.now() - lastUsedTime;
-        if (gap < MIN_GAP_SAME_KEY_MS) {
-          const waitMs = MIN_GAP_SAME_KEY_MS - gap;
-          await new Promise((r) => setTimeout(r, waitMs));
-        }
-        recordKeyRequest(currentKey.id);
+      // Try translating on this dedicated key.
+      // If temporary 429 / 503 occurs, WE WAIT ON THIS SAME KEY and retry up to 3 times!
+      // We do NOT jump to another key on a 1-minute rate limit!
+      const maxRetriesOnSameKey = 3;
+      let shouldSwitchKey = false;
 
-        const t0 = Date.now();
-        console.log(`[FailoverWorker] Attempting chunk ${options.chunkNumber || 1} with token "${currentKey.name}" (${currentKey.model || 'gemini-3.1-flash-lite'})...`);
-        const translatedHtml = await this.translateChunkWithAi(
-          options.englishText,
-          options.book,
-          currentKey,
-          options.chunkNumber || 1
-        );
+      for (let retry = 0; retry < maxRetriesOnSameKey; retry++) {
+        try {
+          // A. Enforce RPM limit on this dedicated key (sliding window)
+          const currentRpm = getKeyRpm(currentKey.id);
+          if (currentRpm >= MAX_SAFE_RPM_PER_KEY) {
+            const timestamps = keyRequestTimestamps.get(currentKey.id) || [];
+            const oldestReq = timestamps[0] || (Date.now() - 60000);
+            const waitMs = Math.max(1200, 60000 - (Date.now() - oldestReq) + 1000);
+            console.log(`[RateLimiter] Dedicated key "${currentKey.name}" at safe RPM ceiling (${currentRpm}/${MAX_SAFE_RPM_PER_KEY}). Pausing ${Math.ceil(waitMs / 1000)}s on same key...`);
+            await new Promise((r) => setTimeout(r, waitMs));
+          }
 
-        if (!translatedHtml || translatedHtml.trim().length === 0) {
-          throw new Error('پاسخ دریافت شده از مدل هوش مصنوعی خالی بود.');
-        }
+          // B. Enforce minimum gap between consecutive calls on this same key
+          const lastUsedTime = keyLastRequestTime.get(currentKey.id) || 0;
+          const gap = Date.now() - lastUsedTime;
+          if (gap < MIN_GAP_SAME_KEY_MS) {
+            const waitMs = MIN_GAP_SAME_KEY_MS - gap;
+            await new Promise((r) => setTimeout(r, waitMs));
+          }
+          recordKeyRequest(currentKey.id);
 
-        const latency = Date.now() - t0;
-        const wordCount = Math.max(1, options.englishText.split(/\s+/).length);
-        const approxTokens = Math.max(100, Math.round(wordCount * 1.8) + Math.round((translatedHtml.length / 4)));
+          const t0 = Date.now();
+          console.log(`[DedicatedWorker] Translating chunk ${options.chunkNumber || 1} of "${options.book.title}" with dedicated key "${currentKey.name}" (${currentKey.model || 'gemini-3.1-flash-lite'})...`);
 
-        currentKey.totalRequests = (currentKey.totalRequests || 0) + 1;
-        currentKey.successfulRequests = (currentKey.successfulRequests || 0) + 1;
-        currentKey.lastLatencyMs = latency;
-        currentKey.lastUsed = Date.now();
-        currentKey.totalTokensUsed = (currentKey.totalTokensUsed || 0) + approxTokens;
+          const translatedHtml = await this.translateChunkWithAi(
+            options.englishText,
+            options.book,
+            currentKey,
+            options.chunkNumber || 1
+          );
 
-        const todayStr = new Date().toISOString().slice(0, 10);
-        if (currentKey.todayDate !== todayStr) {
-          currentKey.todayDate = todayStr;
-          currentKey.todayTokensUsed = approxTokens;
-        } else {
-          currentKey.todayTokensUsed = (currentKey.todayTokensUsed || 0) + approxTokens;
-        }
+          if (!translatedHtml || translatedHtml.trim().length === 0) {
+            throw new Error('پاسخ دریافت شده از مدل هوش مصنوعی خالی بود.');
+          }
 
-        currentKey.status = 'active';
-        currentKey.cooldownUntil = 0; // successfully verified healthy
-        currentKey.lastError = undefined;
-        db.saveApiKey(currentKey);
+          const latency = Date.now() - t0;
+          const wordCount = Math.max(1, options.englishText.split(/\s+/).length);
+          const approxTokens = Math.max(100, Math.round(wordCount * 1.8) + Math.round((translatedHtml.length / 4)));
 
-        // Update narrative thread in bookCacheManager
-        bookCacheManager.updateCacheAfterChunk({
-          bookId: options.book.id,
-          chunkNumber: options.chunkNumber || 1,
-          englishText: options.englishText,
-          translatedHtml,
-          book: options.book,
-        });
+          currentKey.totalRequests = (currentKey.totalRequests || 0) + 1;
+          currentKey.successfulRequests = (currentKey.successfulRequests || 0) + 1;
+          currentKey.lastLatencyMs = latency;
+          currentKey.lastUsed = Date.now();
+          currentKey.totalTokensUsed = (currentKey.totalTokensUsed || 0) + approxTokens;
 
-        // Remember this healthy key for this user
-        userKeyAssignments.set(userId, currentKey.id);
+          const todayStr = new Date().toISOString().slice(0, 10);
+          if (currentKey.todayDate !== todayStr) {
+            currentKey.todayDate = todayStr;
+            currentKey.todayTokensUsed = approxTokens;
+          } else {
+            currentKey.todayTokensUsed = (currentKey.todayTokensUsed || 0) + approxTokens;
+          }
 
-        return {
-          translatedHtml,
-          keyUsed: currentKey.name,
-          modelUsed: currentKey.model || 'gemini-3.1-flash-lite',
-          switchOccurred,
-        };
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = String(err?.message || err);
-        const errCode = (err?.status || err?.code || err?.error?.code || '');
-        console.warn(`[FailoverWorker] ❌ Token "${currentKey.name}" failed: ${errMsg}`);
-
-        currentKey.failedRequests = (currentKey.failedRequests || 0) + 1;
-        currentKey.lastError = errMsg.slice(0, 250);
-
-        // 1. SUSPENDED PROJECT / PERMISSION DENIED / INVALID KEY (Permanent Failure)
-        const isSuspendedOrInvalid =
-          errMsg.includes('CONSUMER_SUSPENDED') ||
-          errMsg.includes('has been suspended') ||
-          errMsg.includes('PERMISSION_DENIED') ||
-          errMsg.includes('API_KEY_INVALID') ||
-          errMsg.includes('API_KEY_SERVICE_BLOCKED') ||
-          errMsg.includes('BILLING_DISABLED') ||
-          errMsg.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
-          errMsg.includes('The caller does not have permission') ||
-          errCode === 403 ||
-          errCode === 401;
-
-        // 2. DAILY QUOTA EXHAUSTED (6 to 12 hours cooldown)
-        const isDailyQuotaExhausted =
-          errMsg.includes('limit: 0') ||
-          errMsg.includes('FreeTier daily quota') ||
-          errMsg.includes('PerDay') ||
-          errMsg.includes('daily limit exceeded');
-
-        // 3. TRANSIENT RATE LIMIT / BURST (60s cooldown)
-        const isRateLimitOrTransient =
-          errMsg.includes('429') ||
-          errMsg.includes('RESOURCE_EXHAUSTED') ||
-          errMsg.includes('Quota exceeded') ||
-          errMsg.includes('rate-limits') ||
-          errMsg.includes('limit exceeded') ||
-          errMsg.includes('503') ||
-          errMsg.includes('504') ||
-          errMsg.includes('DEADLINE_EXCEEDED') ||
-          errMsg.includes('Deadline expired') ||
-          errMsg.includes('UNAVAILABLE') ||
-          errMsg.includes('timeout') ||
-          errMsg.includes('ETIMEDOUT') ||
-          errMsg.includes('high demand');
-
-        if (isSuspendedOrInvalid) {
-          console.error(`[FailoverWorker] 🚫 Token "${currentKey.name}" is SUSPENDED or INVALID by Google! Disabling and immediately rotating to next active key...`);
-          currentKey.isSuspended = true;
-          currentKey.isActive = false; // Turn OFF so it never interrupts again
-          currentKey.cooldownUntil = Date.now() + 86400000; // 24 hours
-          currentKey.lastError = 'پروژه گوگل معلق شده است (Consumer Suspended / Permission Denied)';
+          currentKey.status = 'active';
+          currentKey.cooldownUntil = 0; // healthy
+          currentKey.lastError = undefined;
           db.saveApiKey(currentKey);
-          userKeyAssignments.delete(userId);
-        } else if (isDailyQuotaExhausted) {
-          console.warn(`[FailoverWorker] ⏳ Token "${currentKey.name}" daily quota exhausted. Cooling down for 6 hours...`);
-          currentKey.cooldownUntil = Date.now() + 6 * 3600 * 1000;
-          currentKey.lastError = 'سهمیه روزانه این توکن به پایان رسید (Daily Quota Exceeded)';
-          db.saveApiKey(currentKey);
-          userKeyAssignments.delete(userId);
-        } else if (isRateLimitOrTransient) {
-          console.warn(`[FailoverWorker] ⚠️ Token "${currentKey.name}" hit rate limit. Cooling down for 60 seconds and moving to back of queue...`);
-          currentKey.cooldownUntil = Date.now() + 60000; // 60s
-          currentKey.lastError = 'محدودیت تعداد درخواست در دقیقه (Rate Limit 429 / 503)';
-          db.saveApiKey(currentKey);
-          userKeyAssignments.delete(userId);
-        } else {
-          currentKey.cooldownUntil = Date.now() + 30000;
-          db.saveApiKey(currentKey);
-          userKeyAssignments.delete(userId);
-        }
 
-        // Brief delay before trying next token in queue
-        await new Promise((r) => setTimeout(r, 400));
+          // Update cache
+          bookCacheManager.updateCacheAfterChunk({
+            bookId: options.book.id,
+            chunkNumber: options.chunkNumber || 1,
+            englishText: options.englishText,
+            translatedHtml,
+            book: options.book,
+          });
+
+          return {
+            translatedHtml,
+            keyUsed: currentKey.name,
+            modelUsed: currentKey.model || 'gemini-3.1-flash-lite',
+            switchOccurred,
+          };
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = String(err?.message || err);
+          const errCode = (err?.status || err?.code || err?.error?.code || '');
+          console.warn(`[DedicatedWorker] ❌ Key "${currentKey.name}" error (attempt ${retry + 1}/${maxRetriesOnSameKey}): ${errMsg}`);
+
+          currentKey.failedRequests = (currentKey.failedRequests || 0) + 1;
+          currentKey.lastError = errMsg.slice(0, 250);
+
+          // 1. Permanent Failure: Google Suspended Project / Permission Denied / Invalid Key
+          const isSuspendedOrInvalid =
+            errMsg.includes('CONSUMER_SUSPENDED') ||
+            errMsg.includes('has been suspended') ||
+            errMsg.includes('PERMISSION_DENIED') ||
+            errMsg.includes('API_KEY_INVALID') ||
+            errMsg.includes('API_KEY_SERVICE_BLOCKED') ||
+            errMsg.includes('BILLING_DISABLED') ||
+            errMsg.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
+            errCode === 403 ||
+            errCode === 401;
+
+          // 2. Daily quota exhausted
+          const isDailyQuotaExhausted =
+            errMsg.includes('limit: 0') ||
+            errMsg.includes('FreeTier daily quota') ||
+            errMsg.includes('PerDay') ||
+            errMsg.includes('daily limit exceeded');
+
+          if (isSuspendedOrInvalid) {
+            console.error(`[DedicatedWorker] 🚫 Key "${currentKey.name}" is SUSPENDED by Google. Disabling and switching to next key...`);
+            currentKey.isSuspended = true;
+            currentKey.isActive = false;
+            currentKey.cooldownUntil = Date.now() + 86400000;
+            currentKey.lastError = 'پروژه گوگل معلق شده است (Consumer Suspended)';
+            db.saveApiKey(currentKey);
+            shouldSwitchKey = true;
+            break;
+          }
+
+          if (isDailyQuotaExhausted) {
+            console.warn(`[DedicatedWorker] ⏳ Key "${currentKey.name}" daily quota exhausted. Switching to next key...`);
+            currentKey.cooldownUntil = Date.now() + 6 * 3600 * 1000;
+            currentKey.lastError = 'سهمیه روزانه این توکن به پایان رسید (Daily Quota Exceeded)';
+            db.saveApiKey(currentKey);
+            shouldSwitchKey = true;
+            break;
+          }
+
+          // Temporary rate limit (429) or transient 503/504
+          if (retry < maxRetriesOnSameKey - 1) {
+            const backoffDelay = (retry + 1) * 8000; // 8s, 16s
+            console.log(`[DedicatedWorker] Key "${currentKey.name}" temporary rate limit. Pausing ${backoffDelay / 1000}s on SAME key...`);
+            currentKey.cooldownUntil = Date.now() + backoffDelay;
+            db.saveApiKey(currentKey);
+            await new Promise((r) => setTimeout(r, backoffDelay));
+          } else {
+            // Failed all 3 retries on this key, mark temporary cooldown and switch
+            console.warn(`[DedicatedWorker] Key "${currentKey.name}" failed ${maxRetriesOnSameKey} retries. Switching to next key...`);
+            currentKey.cooldownUntil = Date.now() + 60000;
+            currentKey.lastError = 'محدودیت تعداد درخواست در دقیقه (Rate Limit 429 / 503)';
+            db.saveApiKey(currentKey);
+            shouldSwitchKey = true;
+          }
+        }
+      }
+
+      if (shouldSwitchKey) {
+        console.warn(`[DedicatedWorker] Releasing key "${currentKey.name}" and switching book "${options.book.title}" to next available key...`);
+        keyExclusiveBookLocks.delete(currentKey.id);
+        bookDedicatedKeys.delete(bookId);
+        await new Promise((r) => setTimeout(r, 800));
         continue;
       }
     }
@@ -627,10 +714,17 @@ export class QueueManager {
 
     job.status = 'processing';
     book.status = 'translating';
+
+    // Lock dedicated key for this book
+    const initialDedicatedKey = getOrAssignDedicatedKeyForBook(book.id);
+    if (initialDedicatedKey) {
+      job.assignedKeyMasked = initialDedicatedKey.name;
+    }
+
     db.saveJob(job);
     db.saveBook(book);
 
-    console.log(`[QueueWorker] Processing Book "${book.title}" (Job: ${job.id}) for User: ${job.userId}`);
+    console.log(`[QueueWorker] Processing Book "${book.title}" (Job: ${job.id}) with dedicated key: ${initialDedicatedKey?.name || 'Auto'}`);
 
     // Process chunks one by one
     for (let cIdx = 0; cIdx < book.chunks.length; cIdx++) {
@@ -638,6 +732,7 @@ export class QueueManager {
       const freshJob = db.getJobById(job.id);
       if (!freshJob || freshJob.status === 'stopped') {
         console.log(`[QueueWorker] Job ${job.id} was stopped. Halting worker.`);
+        releaseBookDedicatedKey(book.id);
         return;
       }
 
@@ -674,7 +769,7 @@ export class QueueManager {
         db.saveBook(book);
 
         // Safe interval between chunks to avoid hitting bursts
-        await new Promise(r => setTimeout(r, 1800));
+        await new Promise(r => setTimeout(r, 2200));
       } catch (err: any) {
         const errMsg = String(err?.message || err);
         console.warn(`[QueueWorker] Chunk ${chunk.chunkNumber} failed: ${errMsg}`);
@@ -721,7 +816,7 @@ export class QueueManager {
         } catch (recErr: any) {
           console.warn(`[QueueWorker] Recovery retry failed for chunk ${chunk.chunkNumber}:`, recErr.message);
         }
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
 
@@ -740,9 +835,9 @@ export class QueueManager {
       job.error = undefined;
       book.status = 'completed';
       console.log(`[QueueWorker] Book "${book.title}" successfully completed! (100% - ${totalCount}/${totalCount} chunks)`);
+      releaseBookDedicatedKey(book.id);
     } else if (completedCount > 0) {
       // Partially completed: DO NOT mark book.status as 'completed'!
-      // Mark job as 'stopped' or 'incomplete', and book as 'draft' so user can continue!
       job.status = 'stopped';
       job.completedChunks = completedCount;
       job.progressPercent = Math.round((completedCount / totalCount) * 100);
@@ -750,6 +845,7 @@ export class QueueManager {
       job.error = `${totalCount - completedCount} بخش به دلیل اتمام سهمیه توکن‌ها ترجمه نشدند. می‌توانید با زدن دکمه «ادامه ترجمه ناقص» آن را کامل کنید.`;
       book.status = 'draft';
       console.log(`[QueueWorker] Book "${book.title}" stopped at ${completedCount}/${totalCount} chunks (${job.progressPercent}%).`);
+      releaseBookDedicatedKey(book.id);
     } else {
       job.status = 'failed';
       job.progressPercent = 0;
@@ -757,6 +853,7 @@ export class QueueManager {
       job.error = 'ترجمه به دلیل محدودیت سهمیه توکن‌ها یا خطای سرور متوقف شد.';
       book.status = 'draft';
       console.log(`[QueueWorker] Book "${book.title}" failed (0 chunks completed).`);
+      releaseBookDedicatedKey(book.id);
     }
 
     db.saveJob(job);
