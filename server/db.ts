@@ -145,6 +145,10 @@ export interface ApiKeyConfig {
   cooldownUntil: number;
   lastLatencyMs?: number;
   assignedUserId?: string; // for user-specific key sticky distribution
+  isSuspended?: boolean; // true if suspended by Google/provider (CONSUMER_SUSPENDED, PERMISSION_DENIED)
+  status?: 'active' | 'cooldown' | 'suspended' | 'disabled';
+  lastError?: string;
+  lastUsed?: number;
 }
 
 export interface SystemSettings {

@@ -2829,7 +2829,8 @@ ${urls.map((u) => `  <url>
       return res.status(404).json({ error: 'کلید مورد نظر در سرور یافت نشد.' });
     }
 
-    const { name, provider, apiKey, model, baseURL, isActive, priority } = req.body;
+    const { name, provider, apiKey, model, baseURL, isActive, priority, isSuspended } = req.body;
+    const activating = isActive === true || (isActive !== false && existing.isActive === false);
     const updatedConfig: ApiKeyConfig = {
       ...existing,
       ...(name !== undefined ? { name: name.trim() } : {}),
@@ -2839,6 +2840,9 @@ ${urls.map((u) => `  <url>
       ...(baseURL !== undefined ? { baseURL: baseURL.trim() } : {}),
       ...(isActive !== undefined ? { isActive: Boolean(isActive) } : {}),
       ...(priority !== undefined ? { priority: Number(priority) } : {}),
+      ...(isSuspended !== undefined ? { isSuspended: Boolean(isSuspended) } : {}),
+      // If admin manually re-enables a key, clear suspension, cooldown, and error so it enters active rotation
+      ...(activating ? { isSuspended: false, cooldownUntil: 0, lastError: undefined } : {}),
     };
 
     db.saveApiKey(updatedConfig);
@@ -2891,6 +2895,9 @@ ${urls.map((u) => `  <url>
 
             const latencyMs = Date.now() - t0;
             k.lastLatencyMs = latencyMs;
+            k.isSuspended = false;
+            k.cooldownUntil = 0;
+            k.lastError = undefined;
             db.saveApiKey(k);
             results.push({ id: k.id, name: k.name, success: true, latencyMs });
           } else {
@@ -2915,19 +2922,45 @@ ${urls.map((u) => `  <url>
             const latencyMs = Date.now() - t0;
             if (resp.ok) {
               k.lastLatencyMs = latencyMs;
+              k.isSuspended = false;
+              k.cooldownUntil = 0;
+              k.lastError = undefined;
               db.saveApiKey(k);
               results.push({ id: k.id, name: k.name, success: true, latencyMs });
             } else {
+              k.failedRequests = (k.failedRequests || 0) + 1;
+              db.saveApiKey(k);
               results.push({ id: k.id, name: k.name, success: false, latencyMs, error: `HTTP ${resp.status}` });
             }
           }
         } catch (err: any) {
-          let errText = err?.message || 'خطای اتصال';
-          if (errText.includes('504') || errText.includes('DEADLINE_EXCEEDED') || errText.includes('Deadline expired')) {
+          const rawErr = String(err?.message || err);
+          let errText = rawErr;
+          k.failedRequests = (k.failedRequests || 0) + 1;
+
+          if (rawErr.includes('CONSUMER_SUSPENDED') || rawErr.includes('has been suspended')) {
+            errText = 'پروژه گوگل معلق شده است (Consumer Suspended)';
+            k.isSuspended = true;
+            k.isActive = false;
+            k.cooldownUntil = Date.now() + 86400000;
+            k.lastError = errText;
+          } else if (rawErr.includes('API_KEY_INVALID') || rawErr.includes('PERMISSION_DENIED')) {
+            errText = 'کلید نامعتبر یا فاقد دسترسی (PERMISSION_DENIED)';
+            k.isSuspended = true;
+            k.isActive = false;
+            k.lastError = errText;
+          } else if (errText.includes('504') || errText.includes('DEADLINE_EXCEEDED') || errText.includes('Deadline expired')) {
             errText = 'پایان مهلت زمان (کد ۵۰۴ - DEADLINE_EXCEEDED)';
+            k.cooldownUntil = Date.now() + 60000;
+            k.lastError = errText;
           } else if (errText.includes('503') || errText.includes('high demand')) {
             errText = 'ترافیک بالای موقت (کد ۵۰۳)';
+            k.cooldownUntil = Date.now() + 60000;
+            k.lastError = errText;
+          } else {
+            k.lastError = errText.slice(0, 200);
           }
+          db.saveApiKey(k);
           results.push({ id: k.id, name: k.name, success: false, error: errText });
         }
       })
@@ -2953,8 +2986,11 @@ ${urls.map((u) => `  <url>
     key.failedRequests = 0;
     key.rpmCount = 0;
     key.cooldownUntil = 0;
+    key.isSuspended = false;
+    key.isActive = true;
+    key.lastError = undefined;
     db.saveApiKey(key);
-    return res.json({ success: true, message: `شمارنده توکن‌ها و درخواست‌های کلید «${key.name}» با موفقیت ریست شد.` });
+    return res.json({ success: true, message: `شمارنده توکن‌ها، خطاها و وضعیت تعلیق کلید «${key.name}» با موفقیت ریست و فعال شد.` });
   });
 
   // Admin Reset All API Keys Stats & Tokens
@@ -2968,9 +3004,11 @@ ${urls.map((u) => `  <url>
       k.failedRequests = 0;
       k.rpmCount = 0;
       k.cooldownUntil = 0;
+      k.isSuspended = false;
+      k.lastError = undefined;
       db.saveApiKey(k);
     });
-    return res.json({ success: true, message: 'آمار توکن‌ها و درخواست‌های کلیه کلیدهای سرور با موفقیت صفر شد.' });
+    return res.json({ success: true, message: 'آمار توکن‌ها، خطاها و وضعیت تعلیق کلیه کلیدهای سرور با موفقیت صفر و رفع شد.' });
   });
 
   // Admin Delete API Key

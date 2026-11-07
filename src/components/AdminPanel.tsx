@@ -4993,6 +4993,11 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                         <tr key={k.id} className="hover:bg-slate-800/40 transition-colors">
                           <td className="py-3.5 px-4 font-bold text-white">
                             <div>{k.name}</div>
+                            {k.lastError && (
+                              <div className="text-[9.5px] text-rose-400/90 font-normal max-w-[200px] truncate" title={k.lastError}>
+                                {k.lastError}
+                              </div>
+                            )}
                             {k.assignedUserId && (
                               <span className="text-[10px] text-amber-400 font-mono">کاربر اختصاصی: {k.assignedUserId}</span>
                             )}
@@ -5003,10 +5008,14 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                             </span>
                           </td>
                           <td className="py-3.5 px-4">
-                            <div className="flex items-center gap-1.5">
-                              {isCooldown ? (
-                                <span className="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 text-[10px] font-bold">
-                                  توقف موقت ({secondsLeft} ثانیه)
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {k.isSuspended ? (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-600/20 text-rose-300 border border-rose-500/40 text-[10px] font-bold flex items-center gap-1" title={k.lastError || 'پروژه گوگل معلق شده است (Consumer Suspended)'}>
+                                  <span>🚫 معلق شده (گوگل)</span>
+                                </span>
+                              ) : isCooldown ? (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 text-[10px] font-bold" title={k.lastError}>
+                                  توقف موقت ({secondsLeft > 180 ? `${Math.ceil(secondsLeft / 60)} دقیقه` : `${secondsLeft} ثانیه`})
                                 </span>
                               ) : k.isActive ? (
                                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-bold">
@@ -5020,13 +5029,13 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                               <button
                                 onClick={() => handleToggleKeyActive(k)}
                                 className={`text-[10px] px-1.5 py-0.5 rounded border transition ${
-                                  k.isActive
+                                  k.isActive && !k.isSuspended
                                     ? 'border-slate-700 text-slate-400 hover:border-rose-500/40 hover:text-rose-400'
                                     : 'border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10'
                                 }`}
-                                title="تغییر وضعیت فعال / غیرفعال کلید"
+                                title={k.isSuspended ? 'رفع تعلیق و فعال‌سازی مجدد کلید' : 'تغییر وضعیت فعال / غیرفعال کلید'}
                               >
-                                {k.isActive ? 'خاموش' : 'روشن'}
+                                {k.isSuspended ? 'رفع تعلیق و فعال‌سازی' : k.isActive ? 'خاموش' : 'روشن'}
                               </button>
                             </div>
                           </td>

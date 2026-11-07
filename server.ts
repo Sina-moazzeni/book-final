@@ -187,7 +187,20 @@ let lastCallTimestamp = 0;
 
 function syncDbKeysIntoPool() {
   try {
-    const dbGemini = db.getApiKeys().filter(k => k.isActive && k.provider === 'gemini' && k.apiKey?.trim().length > 8);
+    const allDbKeys = db.getApiKeys();
+    const dbGemini = allDbKeys.filter(k => k.isActive && !k.isSuspended && k.provider === 'gemini' && k.apiKey?.trim().length > 8);
+    const disabledOrSuspendedKeys = new Set(
+      allDbKeys.filter(k => !k.isActive || k.isSuspended).map(k => k.apiKey.trim())
+    );
+
+    // Disable any keys that were suspended or deactivated in DB
+    keyPool.forEach(k => {
+      if (disabledOrSuspendedKeys.has(k.key)) {
+        k.status = 'cooldown';
+        k.cooldownUntil = Date.now() + 86400000; // 24h
+      }
+    });
+
     for (const dbKey of dbGemini) {
       const cleanKey = dbKey.apiKey.trim();
       const existing = keyPool.find(k => k.key === cleanKey);
@@ -202,6 +215,10 @@ function syncDbKeysIntoPool() {
           lastUsed: 0,
           errorCount: 0,
         });
+      } else if (existing.status === 'cooldown' && existing.cooldownUntil > Date.now() + 3600000 && !dbKey.isSuspended && dbKey.isActive) {
+        // If DB key was reactivated by user, un-suspend in pool
+        existing.status = 'active';
+        existing.cooldownUntil = 0;
       }
     }
   } catch (e) {}
@@ -918,7 +935,7 @@ ${cleanEnglishText}`;
           if (process.env.GEMINI_API_KEY && !avail.includes(process.env.GEMINI_API_KEY.trim())) {
             avail.unshift(process.env.GEMINI_API_KEY.trim());
           }
-          const dbGemini = db.getApiKeys().filter(k => k.isActive && k.provider === 'gemini' && k.apiKey?.trim().length > 8);
+          const dbGemini = db.getApiKeys().filter(k => k.isActive && !k.isSuspended && k.provider === 'gemini' && k.apiKey?.trim().length > 8);
           dbGemini.forEach(k => {
             if (!avail.includes(k.apiKey.trim())) avail.push(k.apiKey.trim());
           });
@@ -1274,11 +1291,40 @@ ${cleanEnglishText}`;
         successfulHtml = cleanHtml;
         successfulModel = currentModelCandidate;
         keyUsedName = keyObj ? keyObj.masked : 'Primary-Key';
+
+        // Accurately record today's token usage and successful request in DB
+        if (keyObj) {
+          try {
+            const approxTokens = Math.max(80, Math.round((cleanEnglishText.length + cleanHtml.length) / 3));
+            const dbKey = db.getApiKeys().find(k => k.apiKey.trim() === keyObj.key.trim());
+            if (dbKey) {
+              const todayStr = new Date().toISOString().slice(0, 10);
+              if (dbKey.todayDate !== todayStr) {
+                dbKey.todayDate = todayStr;
+                dbKey.todayTokensUsed = approxTokens;
+              } else {
+                dbKey.todayTokensUsed = (dbKey.todayTokensUsed || 0) + approxTokens;
+              }
+              dbKey.totalTokensUsed = (dbKey.totalTokensUsed || 0) + approxTokens;
+              dbKey.successfulRequests = (dbKey.successfulRequests || 0) + 1;
+              dbKey.lastUsed = Date.now();
+              dbKey.lastError = undefined;
+              db.saveApiKey(dbKey);
+            }
+          } catch (tokErr) {}
+        }
         break modelLoop;
       } catch (err: any) {
         lastError = err;
         const errorMessage = String(err?.message || err);
         console.warn(`Model ${currentModelCandidate} attempt ${attempt + 1} failed:`, errorMessage.slice(0, 120));
+
+        const isSuspendedOrInvalid =
+          errorMessage.includes('CONSUMER_SUSPENDED') ||
+          errorMessage.includes('has been suspended') ||
+          errorMessage.includes('PERMISSION_DENIED') ||
+          errorMessage.includes('API_KEY_INVALID') ||
+          errorMessage.includes('API_KEY_SERVICE_BLOCKED');
 
         const isQuotaExceeded =
           errorMessage.includes('429') ||
@@ -1299,9 +1345,32 @@ ${cleanEnglishText}`;
           errorMessage.includes('ETIMEDOUT') ||
           errorMessage.includes('ECONNRESET');
 
-        if (keyObj && (isQuotaExceeded || isTransientOrTimeout)) {
+        if (keyObj && isSuspendedOrInvalid) {
+          keyObj.status = 'cooldown';
+          keyObj.cooldownUntil = Date.now() + 86400000; // 24h
+          console.error(`[Server API] Key ${keyObj.masked} is SUSPENDED by Google. Moving to end of queue and disabling.`);
+          try {
+            const dbKey = db.getApiKeys().find(k => k.apiKey.trim() === keyObj.key.trim());
+            if (dbKey) {
+              dbKey.isSuspended = true;
+              dbKey.isActive = false;
+              dbKey.cooldownUntil = Date.now() + 86400000;
+              dbKey.lastError = 'پروژه گوگل معلق شده است (Consumer Suspended)';
+              dbKey.failedRequests = (dbKey.failedRequests || 0) + 1;
+              db.saveApiKey(dbKey);
+            }
+          } catch (dbErr) {}
+        } else if (keyObj && (isQuotaExceeded || isTransientOrTimeout)) {
           markKeyCooldown(keyObj, 90);
           console.warn(`Key ${keyObj.masked} moved to cooldown for 90s.`);
+          try {
+            const dbKey = db.getApiKeys().find(k => k.apiKey.trim() === keyObj.key.trim());
+            if (dbKey) {
+              dbKey.failedRequests = (dbKey.failedRequests || 0) + 1;
+              dbKey.lastError = errorMessage.slice(0, 150);
+              db.saveApiKey(dbKey);
+            }
+          } catch (dbErr) {}
         }
 
         if (isTransientOrTimeout && currentModelCandidate.includes('3.5')) {

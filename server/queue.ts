@@ -83,6 +83,90 @@ const userKeyAssignments = new Map<string, string>();
 const activeFailoverReserveKeys = new Set<string>();
 let roundRobinKeyIndex = 0;
 
+// ============================================================================
+// PER-KEY RATE LIMITING & RPM SAFETY ENGINE
+// ============================================================================
+// Track request timestamps for each API key in a 60-second sliding window
+const keyRequestTimestamps = new Map<string, number[]>();
+const keyLastRequestTime = new Map<string, number>();
+
+// Safe ceiling: Google Gemini Free tier limit is 15 RPM.
+// 10 RPM provides a safe 33% headroom to strictly prevent ANY 429 errors or quota suspensions.
+const MAX_SAFE_RPM_PER_KEY = 10;
+const MIN_GAP_SAME_KEY_MS = 2500; // at least 2.5s between consecutive calls to the SAME key
+
+export function getKeyRpm(keyId: string): number {
+  const now = Date.now();
+  const times = keyRequestTimestamps.get(keyId) || [];
+  const valid = times.filter((t) => now - t < 60000);
+  keyRequestTimestamps.set(keyId, valid);
+  return valid.length;
+}
+
+export function recordKeyRequest(keyId: string) {
+  const now = Date.now();
+  const times = keyRequestTimestamps.get(keyId) || [];
+  times.push(now);
+  const valid = times.filter((t) => now - t < 60000);
+  keyRequestTimestamps.set(keyId, valid);
+  keyLastRequestTime.set(keyId, now);
+}
+
+/**
+ * Builds an intelligently sorted candidate queue of API keys:
+ * - Suspended or inactive keys are strictly excluded or placed at the absolute end.
+ * - Ready keys with available RPM capacity come FIRST (Tier 1).
+ * - Keys near their 10 RPM capacity come SECOND (Tier 2).
+ * - Keys currently in cooldown go to the ABSOLUTE END (Tier 3) and are NEVER touched while ready keys exist.
+ */
+export function getCandidateKeysQueue(allKeys: ApiKeyConfig[], preferredKeyId?: string): ApiKeyConfig[] {
+  const now = Date.now();
+
+  // Filter out permanently suspended or manually turned-off keys
+  const usable = allKeys.filter((k) => k.isActive && !k.isSuspended);
+  if (usable.length === 0) {
+    return [];
+  }
+
+  const readyKeys: ApiKeyConfig[] = [];
+  const rpmBusyKeys: ApiKeyConfig[] = [];
+  const coolingKeys: ApiKeyConfig[] = [];
+
+  for (const k of usable) {
+    if (k.cooldownUntil > now) {
+      coolingKeys.push(k);
+    } else if (getKeyRpm(k.id) >= MAX_SAFE_RPM_PER_KEY) {
+      rpmBusyKeys.push(k);
+    } else {
+      readyKeys.push(k);
+    }
+  }
+
+  // Sort ready keys: lowest RPM and least recently used first for smooth load balancing
+  readyKeys.sort((a, b) => {
+    const rpmA = getKeyRpm(a.id);
+    const rpmB = getKeyRpm(b.id);
+    if (rpmA !== rpmB) return rpmA - rpmB;
+    const lastA = keyLastRequestTime.get(a.id) || 0;
+    const lastB = keyLastRequestTime.get(b.id) || 0;
+    return lastA - lastB;
+  });
+
+  // If a preferred key is in ready keys and has safe RPM remaining, place it first
+  if (preferredKeyId) {
+    const prefIdx = readyKeys.findIndex((k) => k.id === preferredKeyId);
+    if (prefIdx > 0 && getKeyRpm(preferredKeyId) < MAX_SAFE_RPM_PER_KEY - 2) {
+      const [pref] = readyKeys.splice(prefIdx, 1);
+      readyKeys.unshift(pref);
+    }
+  }
+
+  // Sort cooling keys: earliest cooldown expiry first (only fallback if all ready keys fail)
+  coolingKeys.sort((a, b) => a.cooldownUntil - b.cooldownUntil);
+
+  return [...readyKeys, ...rpmBusyKeys, ...coolingKeys];
+}
+
 export interface PoolPartitionResult {
   totalConnectedServers: number;
   activeSlotsLimit: number; // 70% active translation capacity
@@ -103,7 +187,7 @@ export class QueueManager {
 
   public startWorker() {
     setInterval(() => {
-      this.tick().catch(err => console.error('[QueueWorker] Tick error:', err));
+      this.tick().catch((err) => console.error('[QueueWorker] Tick error:', err));
     }, 3500);
   }
 
@@ -114,7 +198,7 @@ export class QueueManager {
    * - 30% of slots are strictly held in reserve to ensure service stability and token exhaustion failover
    */
   public getPoolPartition(): PoolPartitionResult {
-    const allActiveKeys = db.getApiKeys().filter(k => k.isActive);
+    const allActiveKeys = db.getApiKeys().filter((k) => k.isActive && !k.isSuspended);
 
     if (allActiveKeys.length === 0) {
       const fallbackKey = process.env.GEMINI_API_KEY
@@ -130,6 +214,7 @@ export class QueueManager {
             successfulRequests: 0,
             failedRequests: 0,
             totalTokensUsed: 0,
+            todayTokensUsed: 0,
             rpmCount: 0,
             cooldownUntil: 0,
           }]
@@ -148,11 +233,6 @@ export class QueueManager {
 
     const total = allActiveKeys.length;
 
-    // Dynamically calculate 70% active processing slots and 30% reserve slots:
-    // e.g. 10 keys -> 7 active, 3 reserve
-    // e.g. 100 keys -> 70 active, 30 reserve
-    // e.g. 5 keys -> 3 active (or 4), 2 reserve
-    // e.g. 1 key -> 1 active, 0 reserve
     let activeSlotsLimit = Math.max(1, Math.floor(total * 0.70));
     if (total === 1) {
       activeSlotsLimit = 1;
@@ -176,8 +256,8 @@ export class QueueManager {
   public getStats() {
     const allJobs = db.getActiveJobs();
     const partition = this.getPoolPartition();
-    const queuedJobs = allJobs.filter(j => j.status === 'queued');
-    const processingJobs = allJobs.filter(j => j.status === 'processing');
+    const queuedJobs = allJobs.filter((j) => j.status === 'queued');
+    const processingJobs = allJobs.filter((j) => j.status === 'processing');
 
     return {
       totalConnectedServers: partition.totalConnectedServers,
@@ -223,41 +303,16 @@ export class QueueManager {
     };
   }
 
-  // Get or assign a primary API key from the 70% active capacity pool
+  // Get or assign a primary API key prioritizing non-cooldown, non-suspended keys
   private getKeyForUser(userId: string): ApiKeyConfig | null {
-    const partition = this.getPoolPartition();
-    const now = Date.now();
-
-    // Check if user already has an active key assigned that is not in cooldown
+    const allActive = db.getApiKeys().filter((k) => k.isActive && !k.isSuspended);
     const assignedKeyId = userKeyAssignments.get(userId);
-    if (assignedKeyId) {
-      const allActive = db.getApiKeys().filter(k => k.isActive);
-      const assigned = allActive.find(k => k.id === assignedKeyId);
-      if (assigned && assigned.cooldownUntil <= now) {
-        return assigned;
-      }
-    }
+    const candidates = getCandidateKeysQueue(allActive, assignedKeyId);
 
-    // Select strictly from the 70% Primary Keys pool
-    const primaryAvailable = partition.primaryKeys.filter(k => k.cooldownUntil <= now);
-    const candidateKeys = primaryAvailable.length > 0 ? primaryAvailable : partition.primaryKeys;
-
-    if (candidateKeys.length > 0) {
-      roundRobinKeyIndex = (roundRobinKeyIndex + 1) % candidateKeys.length;
-      const selected = candidateKeys[roundRobinKeyIndex];
+    if (candidates.length > 0) {
+      const selected = candidates[0];
       userKeyAssignments.set(userId, selected.id);
       return selected;
-    }
-
-    // Fallback: If all primary are down, check reserve pool
-    if (partition.reserveKeys.length > 0) {
-      const healthyReserve = partition.reserveKeys.filter(k => k.cooldownUntil <= now);
-      if (healthyReserve.length > 0) {
-        const resKey = healthyReserve[0];
-        userKeyAssignments.set(userId, resKey.id);
-        activeFailoverReserveKeys.add(resKey.id);
-        return resKey;
-      }
     }
 
     // Fallback to process.env.GEMINI_API_KEY
@@ -274,6 +329,7 @@ export class QueueManager {
         successfulRequests: 0,
         failedRequests: 0,
         totalTokensUsed: 0,
+        todayTokensUsed: 0,
         rpmCount: 0,
         cooldownUntil: 0,
       };
@@ -287,13 +343,12 @@ export class QueueManager {
    * Triggered when token exhaustion, 429 quota, or rate-limiting occurs
    */
   private switchUserToBackupKey(userId: string, currentKeyId: string): ApiKeyConfig | null {
-    const allActive = db.getApiKeys().filter(k => k.isActive && k.id !== currentKeyId);
+    const allActive = db.getApiKeys().filter((k) => k.isActive && !k.isSuspended && k.id !== currentKeyId);
     const now = Date.now();
-    const currentKey = db.getApiKeys().find(k => k.id === currentKeyId);
+    const currentKey = db.getApiKeys().find((k) => k.id === currentKeyId);
 
     // 1. Prioritize switching to another healthy key with the EXACT SAME MODEL
-    // (e.g. if keys are on gemini-3.5-flash-lite, automatically rotate to the next key without altering the model)
-    const sameModelKeys = allActive.filter(k => k.cooldownUntil <= now && (!currentKey || k.model === currentKey.model));
+    const sameModelKeys = allActive.filter((k) => k.cooldownUntil <= now && (!currentKey || k.model === currentKey.model));
     if (sameModelKeys.length > 0) {
       const nextKey = sameModelKeys[0];
       userKeyAssignments.set(userId, nextKey.id);
@@ -301,8 +356,8 @@ export class QueueManager {
       return nextKey;
     }
 
-    // 2. Fallback: If all keys of the current model are exhausted, switch to the next available healthy key (using that key's assigned model)
-    const otherHealthyKeys = allActive.filter(k => k.cooldownUntil <= now);
+    // 2. Fallback: Next available healthy key
+    const otherHealthyKeys = allActive.filter((k) => k.cooldownUntil <= now);
     if (otherHealthyKeys.length > 0) {
       const nextKey = otherHealthyKeys[0];
       userKeyAssignments.set(userId, nextKey.id);
@@ -327,13 +382,11 @@ export class QueueManager {
     this.isProcessing = true;
 
     try {
-      // Dynamically calculate 70% active processing capacity based on current connected API servers
       const partition = this.getPoolPartition();
       const maxConcurrent = partition.activeSlotsLimit;
       const queuedJobs = db.getActiveJobs();
 
       for (const job of queuedJobs) {
-        // Strict 70% active processing cap: Never exceed 70% of available API slots
         if (this.activeJobIds.size >= maxConcurrent) {
           break;
         }
@@ -341,7 +394,6 @@ export class QueueManager {
           continue;
         }
 
-        // Launch background processing for this job in an active slot
         this.activeJobIds.add(job.id);
         this.processJob(job).finally(() => {
           this.activeJobIds.delete(job.id);
@@ -359,8 +411,10 @@ export class QueueManager {
 
   /**
    * Translates a single text chunk with automatic multi-token failover.
-   * If an API key/token hits 429 quota exhaustion, resource exhaustion, 503/504, or rate limits,
-   * it automatically rotates to the next active token in the pool and re-sends the request immediately.
+   * If an API key/token hits 429 quota exhaustion, resource exhaustion, 503/504, or rate limits:
+   * - It puts that key at the VERY END of the line with a cooldown.
+   * - It automatically and instantly switches to the next active token in the pool.
+   * - If a key is suspended/invalid by Google (CONSUMER_SUSPENDED, 403), it disables it permanently so it never interrupts work.
    */
   public async translateChunkWithFailover(options: {
     englishText: string;
@@ -375,31 +429,14 @@ export class QueueManager {
     switchOccurred: boolean;
   }> {
     const userId = options.userId || 'system_direct';
-    const allActive = db.getApiKeys().filter(k => k.isActive);
+    const allDbKeys = db.getApiKeys();
+    const assignedKeyId = options.specificKeyId || userKeyAssignments.get(userId);
 
-    if (allActive.length === 0 && !process.env.GEMINI_API_KEY) {
-      throw new Error('هیچ کلید هوش مصنوعی فعالی روی سرور ثبت نشده است. لطفاً در پنل مدیریت حداقل یک کلید API وارد فرمایید.');
-    }
+    // Build strictly prioritized candidate queue
+    const candidateKeys = getCandidateKeysQueue(allDbKeys, assignedKeyId);
 
-    const now = Date.now();
-    let initialKey = this.getKeyForUser(userId);
-    if (!initialKey && allActive.length > 0) {
-      initialKey = allActive[0];
-    }
-
-    // Candidate keys queue: preferred key first, then other active keys sorted by availability
-    const candidateKeys: ApiKeyConfig[] = [];
-    if (initialKey) {
-      candidateKeys.push(initialKey);
-    }
-    for (const k of allActive) {
-      if (!candidateKeys.some(c => c.id === k.id)) {
-        candidateKeys.push(k);
-      }
-    }
-
-    // Include process.env.GEMINI_API_KEY if available
-    if (process.env.GEMINI_API_KEY && !candidateKeys.some(k => k.id === 'env_fallback_key')) {
+    // If no DB keys ready, try fallback environment key
+    if (candidateKeys.length === 0 && process.env.GEMINI_API_KEY) {
       candidateKeys.push({
         id: 'env_fallback_key',
         name: 'Environment Gemini Key',
@@ -412,9 +449,14 @@ export class QueueManager {
         successfulRequests: 0,
         failedRequests: 0,
         totalTokensUsed: 0,
+        todayTokensUsed: 0,
         rpmCount: 0,
         cooldownUntil: 0,
       });
+    }
+
+    if (candidateKeys.length === 0) {
+      throw new Error('هیچ کلید هوش مصنوعی فعال یا سالمی در سرور یافت نشد. لطفاً در پنل مدیریت کلیدهای خود را بررسی کرده یا کلید جدید اضافه فرمایید.');
     }
 
     let lastError: any = null;
@@ -430,6 +472,15 @@ export class QueueManager {
       }
 
       try {
+        // Enforce safe RPM spacing on this specific key to guarantee no 429 burst errors
+        const lastUsedTime = keyLastRequestTime.get(currentKey.id) || 0;
+        const gap = Date.now() - lastUsedTime;
+        if (gap < MIN_GAP_SAME_KEY_MS) {
+          const waitMs = MIN_GAP_SAME_KEY_MS - gap;
+          await new Promise((r) => setTimeout(r, waitMs));
+        }
+        recordKeyRequest(currentKey.id);
+
         const t0 = Date.now();
         console.log(`[FailoverWorker] Attempting chunk ${options.chunkNumber || 1} with token "${currentKey.name}" (${currentKey.model || 'gemini-3.1-flash-lite'})...`);
         const translatedHtml = await this.translateChunkWithAi(
@@ -444,11 +495,26 @@ export class QueueManager {
         }
 
         const latency = Date.now() - t0;
+        const wordCount = Math.max(1, options.englishText.split(/\s+/).length);
+        const approxTokens = Math.max(100, Math.round(wordCount * 1.8) + Math.round((translatedHtml.length / 4)));
+
         currentKey.totalRequests = (currentKey.totalRequests || 0) + 1;
         currentKey.successfulRequests = (currentKey.successfulRequests || 0) + 1;
         currentKey.lastLatencyMs = latency;
-        const estTokens = Math.max(100, Math.round(options.englishText.split(/\s+/).length * 1.8));
-        currentKey.totalTokensUsed = (currentKey.totalTokensUsed || 0) + estTokens;
+        currentKey.lastUsed = Date.now();
+        currentKey.totalTokensUsed = (currentKey.totalTokensUsed || 0) + approxTokens;
+
+        const todayStr = new Date().toISOString().slice(0, 10);
+        if (currentKey.todayDate !== todayStr) {
+          currentKey.todayDate = todayStr;
+          currentKey.todayTokensUsed = approxTokens;
+        } else {
+          currentKey.todayTokensUsed = (currentKey.todayTokensUsed || 0) + approxTokens;
+        }
+
+        currentKey.status = 'active';
+        currentKey.cooldownUntil = 0; // successfully verified healthy
+        currentKey.lastError = undefined;
         db.saveApiKey(currentKey);
 
         // Update narrative thread in bookCacheManager
@@ -460,7 +526,7 @@ export class QueueManager {
           book: options.book,
         });
 
-        // Remember this successful key for this user
+        // Remember this healthy key for this user
         userKeyAssignments.set(userId, currentKey.id);
 
         return {
@@ -472,14 +538,38 @@ export class QueueManager {
       } catch (err: any) {
         lastError = err;
         const errMsg = String(err?.message || err);
-        console.warn(`[FailoverWorker] Token "${currentKey.name}" failed: ${errMsg}`);
+        const errCode = (err?.status || err?.code || err?.error?.code || '');
+        console.warn(`[FailoverWorker] ❌ Token "${currentKey.name}" failed: ${errMsg}`);
 
         currentKey.failedRequests = (currentKey.failedRequests || 0) + 1;
-        const isQuotaOrLimit =
+        currentKey.lastError = errMsg.slice(0, 250);
+
+        // 1. SUSPENDED PROJECT / PERMISSION DENIED / INVALID KEY (Permanent Failure)
+        const isSuspendedOrInvalid =
+          errMsg.includes('CONSUMER_SUSPENDED') ||
+          errMsg.includes('has been suspended') ||
+          errMsg.includes('PERMISSION_DENIED') ||
+          errMsg.includes('API_KEY_INVALID') ||
+          errMsg.includes('API_KEY_SERVICE_BLOCKED') ||
+          errMsg.includes('BILLING_DISABLED') ||
+          errMsg.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') ||
+          errMsg.includes('The caller does not have permission') ||
+          errCode === 403 ||
+          errCode === 401;
+
+        // 2. DAILY QUOTA EXHAUSTED (6 to 12 hours cooldown)
+        const isDailyQuotaExhausted =
+          errMsg.includes('limit: 0') ||
+          errMsg.includes('FreeTier daily quota') ||
+          errMsg.includes('PerDay') ||
+          errMsg.includes('daily limit exceeded');
+
+        // 3. TRANSIENT RATE LIMIT / BURST (60s cooldown)
+        const isRateLimitOrTransient =
           errMsg.includes('429') ||
-          errMsg.includes('Quota') ||
           errMsg.includes('RESOURCE_EXHAUSTED') ||
-          errMsg.includes('limit: 500') ||
+          errMsg.includes('Quota exceeded') ||
+          errMsg.includes('rate-limits') ||
           errMsg.includes('limit exceeded') ||
           errMsg.includes('503') ||
           errMsg.includes('504') ||
@@ -487,16 +577,38 @@ export class QueueManager {
           errMsg.includes('Deadline expired') ||
           errMsg.includes('UNAVAILABLE') ||
           errMsg.includes('timeout') ||
-          errMsg.includes('rate-limits');
+          errMsg.includes('ETIMEDOUT') ||
+          errMsg.includes('high demand');
 
-        if (isQuotaOrLimit) {
-          currentKey.cooldownUntil = Date.now() + 60000;
+        if (isSuspendedOrInvalid) {
+          console.error(`[FailoverWorker] 🚫 Token "${currentKey.name}" is SUSPENDED or INVALID by Google! Disabling and immediately rotating to next active key...`);
+          currentKey.isSuspended = true;
+          currentKey.isActive = false; // Turn OFF so it never interrupts again
+          currentKey.cooldownUntil = Date.now() + 86400000; // 24 hours
+          currentKey.lastError = 'پروژه گوگل معلق شده است (Consumer Suspended / Permission Denied)';
           db.saveApiKey(currentKey);
-          console.log(`[FailoverWorker] ⚠️ Token "${currentKey.name}" quota exhausted. Seamlessly switching to next active token in pool...`);
+          userKeyAssignments.delete(userId);
+        } else if (isDailyQuotaExhausted) {
+          console.warn(`[FailoverWorker] ⏳ Token "${currentKey.name}" daily quota exhausted. Cooling down for 6 hours...`);
+          currentKey.cooldownUntil = Date.now() + 6 * 3600 * 1000;
+          currentKey.lastError = 'سهمیه روزانه این توکن به پایان رسید (Daily Quota Exceeded)';
+          db.saveApiKey(currentKey);
+          userKeyAssignments.delete(userId);
+        } else if (isRateLimitOrTransient) {
+          console.warn(`[FailoverWorker] ⚠️ Token "${currentKey.name}" hit rate limit. Cooling down for 60 seconds and moving to back of queue...`);
+          currentKey.cooldownUntil = Date.now() + 60000; // 60s
+          currentKey.lastError = 'محدودیت تعداد درخواست در دقیقه (Rate Limit 429 / 503)';
+          db.saveApiKey(currentKey);
+          userKeyAssignments.delete(userId);
+        } else {
+          currentKey.cooldownUntil = Date.now() + 30000;
+          db.saveApiKey(currentKey);
+          userKeyAssignments.delete(userId);
         }
 
-        // Brief delay before trying next token
-        await new Promise(r => setTimeout(r, 800));
+        // Brief delay before trying next token in queue
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
       }
     }
 
