@@ -4998,7 +4998,12 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                                 {k.lastError}
                               </div>
                             )}
-                            {k.assignedUserId && (
+                            {k.assignedBookTitle && (
+                              <div className="text-[10px] text-cyan-300 font-medium flex items-center gap-1 mt-0.5" title={`این کلید منحصراً به کتاب «${k.assignedBookTitle}» اختصاص یافته و کتاب‌های دیگر از آن استفاده نمی‌کنند.`}>
+                                <span>🔒 اختصاصی کتاب: «{k.assignedBookTitle}»</span>
+                              </div>
+                            )}
+                            {k.assignedUserId && !k.assignedBookTitle && (
                               <span className="text-[10px] text-amber-400 font-mono">کاربر اختصاصی: {k.assignedUserId}</span>
                             )}
                           </td>

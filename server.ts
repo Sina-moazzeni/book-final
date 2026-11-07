@@ -16,6 +16,7 @@ import { BOOK_THEMES } from './src/constants/themes.ts';
 import { setupSaasRoutes } from './server/saasRoutes.ts';
 import { db } from './server/db.ts';
 import { bookCacheManager } from './server/bookCacheManager.ts';
+import { getOrAssignDedicatedKeyForBook, releaseBookDedicatedKey } from './server/queue.ts';
 import {
   markGemini35HighDemand,
   isGemini35InHighDemand,
@@ -1233,7 +1234,25 @@ ${cleanEnglishText}`;
     const maxRetriesPerModel = Math.max(2, keyPool.length);
 
     for (let attempt = 0; attempt < maxRetriesPerModel; attempt++) {
-      const keyObj = getAvailableKey();
+      let keyObj: any = null;
+      if (resolvedBookId) {
+        const dedicated = getOrAssignDedicatedKeyForBook(resolvedBookId);
+        if (dedicated) {
+          keyObj = {
+            key: dedicated.apiKey.trim(),
+            masked: `${dedicated.apiKey.trim().slice(0, 4)}...${dedicated.apiKey.trim().slice(-4)}`,
+            status: 'active',
+            cooldownUntil: dedicated.cooldownUntil || 0,
+            rpmCount: dedicated.rpmCount || 0,
+            totalRequests: dedicated.totalRequests || 0,
+            lastUsed: dedicated.lastUsed || 0,
+            errorCount: dedicated.failedRequests || 0,
+          };
+        }
+      }
+      if (!keyObj) {
+        keyObj = getAvailableKey();
+      }
       const apiKey = keyObj?.key || process.env.GEMINI_API_KEY;
 
       if (!apiKey) {

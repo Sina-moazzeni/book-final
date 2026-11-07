@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { db, User, BookRecord, BookChunkRecord, TranslationJob, TransactionRecord, ApiKeyConfig, DEFAULT_ROBOTS_TXT, DEFAULT_LLMS_TXT } from './db.ts';
-import { queueManager } from './queue.ts';
+import { queueManager, keyExclusiveBookLocks } from './queue.ts';
 import { GoogleGenAI } from '@google/genai';
 import { sendRealOtpSms } from './smsService.ts';
 import { zarinpalService } from './zarinpalService.ts';
@@ -2776,8 +2776,14 @@ ${urls.map((u) => `  <url>
       const totalCostUsd = Number((((k.totalTokensUsed || 0) / 1000000) * costPerMillionUsd).toFixed(4));
       const totalCostTomans = Math.round(totalCostUsd * usdToTomanRate);
 
+      const assignedBookId = keyExclusiveBookLocks.get(k.id);
+      const assignedBook = assignedBookId ? db.getBookById(assignedBookId) : null;
+      const assignedBookTitle = assignedBook ? assignedBook.title : undefined;
+
       return {
         ...k,
+        assignedBookId,
+        assignedBookTitle,
         todayTokensUsed: todayTokens,
         todayDate: todayStr,
         costPerMillionTokens: costPerMillionUsd,
