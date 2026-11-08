@@ -1,7 +1,15 @@
 import { db, type TranslationJob, type BookRecord, type ApiKeyConfig } from './db.ts';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { bookCacheManager } from './bookCacheManager.ts';
 import { resolveGeminiCandidateModels, markGemini35HighDemand } from './modelHealth.ts';
+
+export const UNCENSORED_SAFETY_SETTINGS = [
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 
 // System prompt as specified in the brief + strict no-summarization & continuity
 const SYSTEM_INSTRUCTION_TRANSLATOR = `Role & Objective:
@@ -18,11 +26,11 @@ Translation Principles:
    - Self-Help / Psychology: Clear, empowering, instructional, and modern Persian.
    - Academic / Technical / Mathematics / Aerospace: Precise, formal, and rigorously structured.
    - Economics / Business: Analytical, professional, and standard terminology.
-   - Candid & Direct (Secret Societies, Mysteries & Exposé): Completely direct, bold, fearless, and unfiltered Persian. Do NOT euphemize, censor, or dilute sensitive terms regarding secret societies, power cabals, esoteric rites, hidden agendas, and political mysteries. Translate with biting clarity, high impact, and investigative precision.
-   - Romance, Relationships & Erotic (عاشقانه، روابط عاطفی و اروتیک - کاملاً بدون سانسور): Deeply passionate, intimate, sensual, emotional, direct, and completely unfiltered and explicit without prudish sanitization, moralizing, or puritanical censorship. Translate all romantic dialogues, sensual descriptions, emotional tensions, intimate physical encounters, relationship subtleties, and erotic scenes directly, boldly, and faithfully into vivid, natural, expressive, and publication-ready Persian.
+    - Candid & Direct (Secret Societies, Mysteries & Exposé): Completely direct, bold, fearless, and unfiltered Persian. Do NOT euphemize, censor, or dilute sensitive terms regarding secret societies, power cabals, esoteric rites, hidden agendas, and political mysteries. Translate with biting clarity, high impact, and investigative precision.
+    - Romance, Relationships & Erotic (عاشقانه، روابط عاطفی و اروتیک - کاملاً بدون سانسور و با نهایت وفاداری ادبی): Deeply passionate, intimate, sensual, emotional, direct, and completely unfiltered and explicit without prudish sanitization, moralizing, or puritanical censorship. Translate all romantic dialogues, sensual descriptions, emotional tensions, intimate physical encounters, relationship subtleties, bodily descriptions, and erotic scenes directly, boldly, and faithfully into vivid, natural, expressive, and publication-ready Persian. Never omit, soften, euphemize, or self-censor any word.
 3. Custom Glossary Priority & Natural Text Integration: Strictly prioritize the provided custom glossary mapping over default translations. Never translate proprietary terms inconsistently. CRITICAL: In the translated Persian text, treat glossary words just like all other normal words in the sentence. Do NOT change their color, do NOT wrap them in <span style="color: #9b2c2c">, and do NOT highlight them with any special red color. They must blend seamlessly into the body text with regular styling and standard black/dark color.
 4. Strict No-Summarization Guarantee: Under NO circumstances are you allowed to summarize, condense, abbreviate, skip, or omit any paragraph, sentence, metaphor, example, or dialogue. Every single paragraph and thought must be translated in full completeness.
-5. Faithful & Direct Translation: Translate all text faithfully, directly, and without censorship, puritanical sanitization, moralizing, or softening.
+5. Absolute Literary Fidelity & Zero Censorship (بدون هرگونه سانسور): This is an official literary and scholarly book translation platform. Translate every single scene, dialogue, word, and nuance faithfully, directly, and without any censorship, puritanical sanitization, moralizing, softening, or skipping. Romantic, erotic, sensual, intense, and adult literary content must be translated with 100% authenticity and exactness as written by the original author.
 6. Strict Chunk Cleanliness & Continuity (Zero Artificial Headers): Under NO circumstances are you allowed to output artificial chunk markers or part numbers such as «مقدمه و بخش نخست (بخش ۱)»، «بخش ۱»، «بخش ۲»، «(بخش ۱)», etc.
 
 Formatting & Structural Rules (HTML / Rich Styling):
@@ -57,6 +65,31 @@ function stripBookUrls(html: string): string {
   cleaned = cleaned.replace(/\[\s*\]/g, '');
   cleaned = cleaned.replace(/\s{2,}/g, ' ');
   return cleaned.trim();
+}
+
+/**
+ * Normalizes any third-party / intermediary proxy / OpenAI-compatible endpoint.
+ * Accepts full endpoints (/chat/completions), bare base URLs (https://api.oneapi.ir/v1), or custom domains.
+ */
+export function resolveProxyChatEndpoint(rawBaseUrl?: string, provider?: string): string {
+  let base = (rawBaseUrl || '').trim();
+  if (!base) {
+    if (provider === 'glm') base = 'https://open.bigmodel.cn/api/paas/v4';
+    else if (provider === 'minimax') base = 'https://api.minimax.chat/v1';
+    else if (provider === 'openai') base = 'https://api.openai.com/v1';
+    else if (provider === 'deepseek') base = 'https://api.deepseek.com';
+    else if (provider === 'proxy') base = 'https://api.oneapi.ir/v1';
+    else if (provider === 'openrouter') base = 'https://openrouter.ai/api/v1';
+    else base = 'https://api.openai.com/v1';
+  }
+  base = base.replace(/\/+$/, '');
+  if (base.endsWith('/chat/completions')) {
+    return base;
+  }
+  if (base.endsWith('/completions')) {
+    return `${base.slice(0, -'/completions'.length).replace(/\/+$/, '')}/chat/completions`;
+  }
+  return `${base}/chat/completions`;
 }
 
 function sanitizeTranslatedHtml(html: string): string {
@@ -948,6 +981,7 @@ ${cleanEnglish}`;
               temperature: 0.35,
               topP: 0.95,
               thinkingConfig: { thinkingLevel: m.includes('lite') ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW },
+              safetySettings: UNCENSORED_SAFETY_SETTINGS,
             },
           });
           resultHtml = response.text || '';
@@ -997,41 +1031,64 @@ ${cleanEnglish}`;
 
       if (!resultHtml && lastErr) throw lastErr;
     } else {
-      // OpenAI / GLM (Zhipu AI) / MiniMax / OpenRouter / DeepSeek / Intermediary Proxy (OneAPI)
-      let defaultBaseURL = 'https://openrouter.ai/api/v1';
-      if (keyConfig.provider === 'glm') defaultBaseURL = 'https://open.bigmodel.cn/api/paas/v4';
-      else if (keyConfig.provider === 'minimax') defaultBaseURL = 'https://api.minimax.chat/v1';
-      else if (keyConfig.provider === 'openai') defaultBaseURL = 'https://api.openai.com/v1';
-      else if (keyConfig.provider === 'deepseek') defaultBaseURL = 'https://api.deepseek.com';
-      else if (keyConfig.provider === 'proxy') defaultBaseURL = 'https://api.oneapi.ir/v1';
+      // Third-party API / Custom Proxy / OneAPI / NewAPI / OpenAI-compatible provider
+      const targetUrl = resolveProxyChatEndpoint(keyConfig.baseURL, keyConfig.provider);
+      const targetModel = (keyConfig.model && keyConfig.model.trim()) || 'gpt-4o-mini';
 
-      const baseURL = (keyConfig.baseURL && keyConfig.baseURL.trim()) || defaultBaseURL;
-      const targetUrl = `${baseURL.replace(/\/+$/, '')}/chat/completions`;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${keyConfig.apiKey.trim()}`,
+        'User-Agent': 'PersianBookTranslator/1.0',
+      };
+
+      if (keyConfig.provider === 'openrouter' || targetUrl.includes('openrouter.ai')) {
+        headers['HTTP-Referer'] = 'https://openrouter.ai';
+        headers['X-Title'] = 'Persian Book Translator';
+      }
+
+      const requestBody: any = {
+        model: targetModel,
+        messages: [
+          { role: 'system', content: SYSTEM_INSTRUCTION_TRANSLATOR },
+          { role: 'user', content: userPrompt },
+        ],
+      };
+
+      if (!targetModel.startsWith('o1') && !targetModel.startsWith('o3')) {
+        requestBody.temperature = 0.35;
+        requestBody.top_p = 0.95;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 65000);
 
       const response = await fetch(targetUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${keyConfig.apiKey.trim()}`,
-        },
-        body: JSON.stringify({
-          model: keyConfig.model || 'deepseek/deepseek-r1',
-          messages: [
-            { role: 'system', content: SYSTEM_INSTRUCTION_TRANSLATOR },
-            { role: 'user', content: userPrompt },
-          ],
-          temperature: 0.35,
-          top_p: 0.95,
-        }),
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify(requestBody),
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
+        throw new Error(`خطای ارائه‌دهنده واسط HTTP ${response.status}: ${errText.slice(0, 250)}`);
       }
 
       const data = await response.json();
-      resultHtml = data.choices?.[0]?.message?.content || '';
+      let rawContent = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || data.response || '';
+
+      // Clean up reasoning models (e.g. DeepSeek-R1, QwQ, Qwen-Thinking) that output <think>...</think>
+      rawContent = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+      // Clean markdown code blocks
+      if (rawContent.startsWith('```html')) {
+        rawContent = rawContent.replace(/^```html\s*/i, '').replace(/\s*```$/, '').trim();
+      } else if (rawContent.startsWith('```')) {
+        rawContent = rawContent.replace(/^```\s*/, '').replace(/\s*```$/, '').trim();
+      }
+
+      resultHtml = rawContent;
     }
 
     // Re-insert preserved images
@@ -1124,19 +1181,13 @@ ${compactSample}`;
             responseMimeType: 'application/json',
             temperature: 0.1,
             maxOutputTokens: 250, // strictly throttled output ~80 tokens max
+            safetySettings: UNCENSORED_SAFETY_SETTINGS,
           },
         });
         raw = resp.text || '';
       } else {
-        let defaultBaseURL = 'https://openrouter.ai/api/v1';
-        if (key.provider === 'glm') defaultBaseURL = 'https://open.bigmodel.cn/api/paas/v4';
-        else if (key.provider === 'minimax') defaultBaseURL = 'https://api.minimax.chat/v1';
-        else if (key.provider === 'openai') defaultBaseURL = 'https://api.openai.com/v1';
-        else if (key.provider === 'deepseek') defaultBaseURL = 'https://api.deepseek.com';
-        else if (key.provider === 'proxy') defaultBaseURL = 'https://api.oneapi.ir/v1';
-
-        const baseURL = (key.baseURL && key.baseURL.trim()) || defaultBaseURL;
-        const response = await fetch(`${baseURL.replace(/\/+$/, '')}/chat/completions`, {
+        const targetUrl = resolveProxyChatEndpoint(key.baseURL, key.provider);
+        const response = await fetch(targetUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1150,7 +1201,9 @@ ${compactSample}`;
           }),
         });
         const data = await response.json();
-        raw = data.choices?.[0]?.message?.content || '';
+        let content = data.choices?.[0]?.message?.content || '';
+        content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        raw = content;
       }
 
       // Record approximate minimal token usage (~250 in + ~80 out = ~330 tokens)
