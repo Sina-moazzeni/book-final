@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { db, type User, type BookRecord, type BookChunkRecord, type TranslationJob, type TransactionRecord, type ApiKeyConfig, DEFAULT_ROBOTS_TXT, DEFAULT_LLMS_TXT } from './db.ts';
-import { queueManager, keyExclusiveBookLocks } from './queue.ts';
+import { queueManager, keyExclusiveBookLocks, resolveProxyChatEndpoint, UNCENSORED_SAFETY_SETTINGS } from './queue.ts';
 import { GoogleGenAI } from '@google/genai';
 import { sendRealOtpSms } from './smsService.ts';
 import { zarinpalService } from './zarinpalService.ts';
@@ -2883,7 +2883,10 @@ ${urls.map((u) => `  <url>
                 await ai.models.generateContent({
                   model: cm,
                   contents: 'Ping',
-                  config: { maxOutputTokens: 5 },
+                  config: {
+                    maxOutputTokens: 5,
+                    safetySettings: UNCENSORED_SAFETY_SETTINGS,
+                  },
                 });
                 worked = true;
                 break;
@@ -2907,8 +2910,8 @@ ${urls.map((u) => `  <url>
             db.saveApiKey(k);
             results.push({ id: k.id, name: k.name, success: true, latencyMs });
           } else {
-            // OpenAI-compatible ping
-            const targetUrl = `${(k.baseURL || 'https://api.openai.com/v1').replace(/\/+$/, '')}/chat/completions`;
+            // OpenAI-compatible / proxy ping
+            const targetUrl = resolveProxyChatEndpoint(k.baseURL, k.provider);
             const controller = new AbortController();
             const tid = setTimeout(() => controller.abort(), 20000);
             const resp = await fetch(targetUrl, {

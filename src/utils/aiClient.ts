@@ -124,10 +124,11 @@ Translation Principles:
    - Novel / Narrative: Engaging, fluid, descriptive, preserving literary rhythm and dialogue dynamics.
    - Self-Help / Psychology: Clear, empowering, instructional, and modern Persian.
    - Academic / Technical: Precise, formal, and structured.
-   - Candid & Direct (Secret Societies, Mysteries & Exposé): Completely direct, bold, fearless, and unfiltered Persian. Do NOT euphemize, censor, or dilute sensitive terms regarding secret societies, power cabals, esoteric rites, hidden agendas, and political mysteries. Translate with biting clarity, high impact, and investigative precision.
+    - Candid & Direct (Secret Societies, Mysteries & Exposé): Completely direct, bold, fearless, and unfiltered Persian. Do NOT euphemize, censor, or dilute sensitive terms regarding secret societies, power cabals, esoteric rites, hidden agendas, and political mysteries. Translate with biting clarity, high impact, and investigative precision.
+    - Romance, Relationships & Erotic (عاشقانه، روابط عاطفی و اروتیک - کاملاً بدون سانسور و با نهایت وفاداری ادبی): Deeply passionate, intimate, sensual, emotional, direct, and completely unfiltered and explicit without prudish sanitization, moralizing, or puritanical censorship. Translate all romantic dialogues, sensual descriptions, emotional tensions, intimate physical encounters, relationship subtleties, bodily descriptions, and erotic scenes directly, boldly, and faithfully into vivid, natural, expressive, and publication-ready Persian. Never omit, soften, euphemize, or self-censor any word.
 3. Custom Glossary Priority & Natural Text Integration: Strictly prioritize the provided custom glossary mapping over default translations. Never translate proprietary terms inconsistently. CRITICAL: In the translated Persian text, treat glossary words just like all other normal words in the sentence. Do NOT change their color, do NOT wrap them in <span style="color: #9b2c2c">, and do NOT highlight them with any special color. They must blend seamlessly into the body text with regular styling.
 4. Strict No-Summarization Guarantee: Under NO circumstances are you allowed to summarize, condense, abbreviate, skip, or omit any paragraph, sentence, metaphor, example, or dialogue. Every single paragraph and thought must be translated in full completeness.
-5. Faithful & Uncensored Translation: This is an official literary and scholarly book translation. Translate all text faithfully, directly, and without censorship, puritanical sanitization, moralizing, or softening. Preserve the author's original voice, register, realism, and vocabulary completely.
+5. Absolute Literary Fidelity & Zero Censorship (بدون هرگونه سانسور): This is an official literary and scholarly book translation platform. Translate every single scene, dialogue, word, and nuance faithfully, directly, and without any censorship, puritanical sanitization, moralizing, softening, or skipping. Romantic, erotic, sensual, intense, and adult literary content must be translated with 100% authenticity and exactness as written by the original author.
 6. Strict Chunk Cleanliness & Continuity (Zero Artificial Headers): Under NO circumstances are you allowed to output artificial chunk markers, part numbers, or invented headings such as «مقدمه و بخش نخست (بخش ۱)»، «بخش ۱»، «بخش ۲»، «(بخش ۱)»، "Part 1", "[Part 1]", etc., into the translation. Do NOT invent or inject a chapter heading unless the original English input text explicitly starts with an author's original title/heading. The chunks must flow together as seamless, continuous prose without artificial breaks.
 
 Formatting & Structural Rules (HTML / Rich Styling):
@@ -556,6 +557,13 @@ ${cleanEnglishText}`;
                     temperature: 0.35,
                     topP: 0.95,
                   },
+                  safetySettings: [
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' },
+                  ],
                 }),
               });
               clearTimeout(timeoutId);
@@ -642,6 +650,7 @@ ${cleanEnglishText}`;
           }
 
           let rawHtml = data?.choices?.[0]?.message?.content?.trim() || '';
+          rawHtml = rawHtml.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
           if (rawHtml.startsWith('```html')) {
             rawHtml = rawHtml.replace(/^```html\s*/i, '').replace(/\s*```$/, '');
           } else if (rawHtml.startsWith('```')) {

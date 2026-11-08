@@ -110,8 +110,8 @@ export const PROVIDER_PRESET_MODELS: Record<string, string[]> = {
   claude: ['anthropic/claude-3.5-sonnet', 'anthropic/claude-3-7-sonnet', 'anthropic/claude-3-5-haiku'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
   openrouter: ['deepseek/deepseek-r1', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct'],
-  proxy: ['gpt-4o', 'deepseek-chat', 'claude-3-5-sonnet'],
-  custom: ['custom-model'],
+  proxy: ['gpt-4o', 'gpt-4o-mini', 'deepseek-chat', 'deepseek-reasoner', 'claude-3-5-sonnet', 'gemini-2.0-flash', 'qwen-plus', 'custom-model'],
+  custom: ['gpt-4o', 'gpt-4o-mini', 'deepseek-chat', 'claude-3-5-sonnet', 'custom-model'],
 };
 
 export const PROVIDER_DEFAULT_BASE_URL: Record<string, string> = {

@@ -268,10 +268,20 @@
 /* Print / PDF generation styles */
 @page {
   size: A4 portrait;
-  margin: 0; /* Setting margin to 0 completely removes browser URL, title, date and timestamps */
+  margin: 0mm !important; /* Setting margin to 0 completely removes browser URL, title, date and timestamps */
+  @top-left { content: none !important; }
+  @top-center { content: none !important; }
+  @top-right { content: none !important; }
+  @bottom-left { content: none !important; }
+  @bottom-center { content: none !important; }
+  @bottom-right { content: none !important; }
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 0mm !important;
+  }
   *, *:before, *:after {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;

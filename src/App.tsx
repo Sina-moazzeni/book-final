@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { LandingPage } from './components/LandingPage.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
 import { Navbar } from './components/Navbar.tsx';
@@ -420,6 +420,41 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Dedicated Clean PDF Printing Handler:
+  // Dynamically sets document.title to the current book's title during print,
+  // preventing the platform branding ("مترجم و ویراستار هوشمند کتاب...") from ever printing
+  // in the PDF header, and ensuring the saved PDF file has the clean book title.
+  const handlePrintPdf = useCallback(() => {
+    const previousTitle = document.title;
+    const cleanTitle = project?.title?.trim() || 'کتاب';
+    document.title = cleanTitle;
+    window.print();
+    setTimeout(() => {
+      document.title = previousTitle;
+    }, 1500);
+  }, [project?.title]);
+
+  useEffect(() => {
+    let savedTitle = document.title;
+    const handleBeforePrint = () => {
+      savedTitle = document.title;
+      if (project?.title?.trim()) {
+        document.title = project.title.trim();
+      }
+    };
+    const handleAfterPrint = () => {
+      if (savedTitle) {
+        document.title = savedTitle;
+      }
+    };
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, [project?.title]);
 
   const handleOpenCustomPage = (slug: string) => {
     setActiveCustomPageSlug(slug);
@@ -1544,7 +1579,7 @@ export default function App() {
           onClose={() => setIsDesignModalOpen(false)}
           project={project}
           onUpdateDesign={(config) => handleUpdateProject({ ...project, designConfig: config })}
-          onPrintPdf={() => window.print()}
+          onPrintPdf={handlePrintPdf}
         />
       </Suspense>
     );
@@ -1606,7 +1641,7 @@ export default function App() {
           onOpenNewBookModal={() => setIsNewBookModalOpen(true)}
           onOpenGlossaryModal={() => setIsGlossaryModalOpen(true)}
           onLoadSampleBook={handleLoadSampleBook}
-          onPrintPdf={() => window.print()}
+          onPrintPdf={handlePrintPdf}
           onOpenLibraryModal={() => setIsLibraryModalOpen(true)}
           booksCount={books.length}
           onOpenProvidersModal={() => setIsProvidersModalOpen(true)}
@@ -1772,7 +1807,7 @@ export default function App() {
         onClose={() => setIsDesignModalOpen(false)}
         project={project}
         onUpdateDesign={(config) => handleUpdateProject({ ...project, designConfig: config })}
-        onPrintPdf={() => window.print()}
+        onPrintPdf={handlePrintPdf}
         onUpdateProject={handleUpdateProject}
         onDeleteChunk={handleDeleteChunk}
       />
