@@ -53,7 +53,8 @@ import {
   Sliders,
   ArrowUp,
   ArrowDown,
-  RotateCcw
+  RotateCcw,
+  CheckSquare
 } from 'lucide-react';
 import {
   User,
@@ -467,6 +468,8 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [batchTargetModel, setBatchTargetModel] = useState('gemini-3.1-flash-lite');
   const [isSwitchingBatchModel, setIsSwitchingBatchModel] = useState(false);
+  const [selectedKeyIds, setSelectedKeyIds] = useState<string[]>([]);
+  const [customBatchModelInput, setCustomBatchModelInput] = useState<string>('');
 
   // SEO Files & Agentic Browsing (Sitemap, Robots.txt, LLMs.txt)
   const [seoFilesTab, setSeoFilesTab] = useState<'robots' | 'sitemap' | 'llms'>('robots');
@@ -1392,9 +1395,21 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
     }
   };
 
-  // Batch Switch Model for All Keys (Allows manager to manually switch model if one is down)
-  const handleBatchSwitchModel = async () => {
-    if (!confirm(`آیا مایلید مدل تمام کلیدهای فعال سرور به «${batchTargetModel}» سوئیچ شود؟`)) return;
+  // Batch Switch Model for Keys (Allows switching all keys or selected subset)
+  const handleBatchSwitchModel = async (specificModel?: string, keyIdsToSwitch?: string[]) => {
+    const modelToApply = (specificModel || customBatchModelInput || batchTargetModel).trim();
+    if (!modelToApply) {
+      alert('لطفاً نام مدل مورد نظر را مشخص یا انتخاب فرمایید.');
+      return;
+    }
+
+    const targetIds = keyIdsToSwitch || (selectedKeyIds.length > 0 ? selectedKeyIds : null);
+    const confirmMsg = targetIds
+      ? `آیا مایلید مدل ${targetIds.length} کلید انتخاب‌شده به «${modelToApply}» تغییر یابد؟`
+      : `آیا مایلید مدل تمام کلیدهای سرور به «${modelToApply}» تغییر یابد؟`;
+
+    if (!confirm(confirmMsg)) return;
+
     setIsSwitchingBatchModel(true);
     try {
       const res = await fetch('/api/admin/api-keys/batch-switch-model', {
@@ -1403,12 +1418,13 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ targetModel: batchTargetModel }),
+        body: JSON.stringify({ targetModel: modelToApply, keyIds: targetIds }),
       });
       const data = await res.json();
       if (res.ok) {
         alert(`✅ ${data.message}`);
         fetchApiKeys();
+        setSelectedKeyIds([]);
       } else {
         alert(data.error || 'خطا در سوئیچ گروهی مدل');
       }
@@ -4835,7 +4851,7 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                     </select>
                     <button
                       type="button"
-                      onClick={handleBatchSwitchModel}
+                      onClick={() => handleBatchSwitchModel()}
                       disabled={isSwitchingBatchModel}
                       className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-50 shrink-0 cursor-pointer"
                     >
@@ -4961,12 +4977,155 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
               </div>
             </div>
 
+            {/* Batch Selection & Model Switching Action Bar */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 shadow-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <CheckSquare className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                      <span>انتخاب گروهی و تغییر مدل کلیدهای API</span>
+                      {selectedKeyIds.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[11px] border border-amber-500/30">
+                          {selectedKeyIds.length} کلید انتخاب شده
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      می‌توانید دسته‌ای از کلیدها را انتخاب کرده و مدل آن‌ها را یکجا (مثلاً به gemini-3.6-flash یا ...) تغییر دهید.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedKeyIds(apiKeys.map(k => k.id))}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-medium transition cursor-pointer"
+                  >
+                    انتخاب همه ({apiKeys.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedKeyIds(apiKeys.filter(k => k.provider === 'gemini').map(k => k.id))}
+                    className="px-2.5 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium transition cursor-pointer"
+                  >
+                    فقط Gemini ({apiKeys.filter(k => k.provider === 'gemini').length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedKeyIds(apiKeys.filter(k => k.isActive && !k.isSuspended).map(k => k.id))}
+                    className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-medium transition cursor-pointer"
+                  >
+                    فقط فعال‌ها ({apiKeys.filter(k => k.isActive && !k.isSuspended).length})
+                  </button>
+                  {selectedKeyIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKeyIds([])}
+                      className="px-2.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[11px] font-medium transition cursor-pointer"
+                    >
+                      لغو انتخاب
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Group Action Bar for Selected Keys */}
+              {selectedKeyIds.length > 0 && (
+                <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 bg-amber-500/5 p-3 rounded-2xl border border-amber-500/20 animate-in fade-in">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-amber-300 font-bold flex items-center gap-1">
+                      <Zap className="w-3.5 h-3.5" />
+                      تغییر سریع مدل {selectedKeyIds.length} کلید انتخابی به:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchSwitchModel('gemini-3.6-flash')}
+                      disabled={isSwitchingBatchModel}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs hover:bg-amber-400 transition cursor-pointer shadow-sm"
+                      title="تنظیم مدل کلیدهای انتخابی روی Gemini 3.6 Flash"
+                    >
+                      ⚡ gemini-3.6-flash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchSwitchModel('gemini-3.5-flash-lite')}
+                      disabled={isSwitchingBatchModel}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-amber-300 border border-amber-500/30 font-mono text-xs hover:bg-slate-700 transition cursor-pointer"
+                    >
+                      gemini-3.5-flash-lite
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchSwitchModel('gemini-3.8-flash')}
+                      disabled={isSwitchingBatchModel}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-amber-300 border border-amber-500/30 font-mono text-xs hover:bg-slate-700 transition cursor-pointer"
+                    >
+                      gemini-3.8-flash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchSwitchModel('gemini-flash-latest')}
+                      disabled={isSwitchingBatchModel}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-300 border border-slate-700 font-mono text-xs hover:bg-slate-700 transition cursor-pointer"
+                    >
+                      gemini-flash-latest
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchSwitchModel('deepseek-chat')}
+                      disabled={isSwitchingBatchModel}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 text-purple-300 border border-purple-500/30 font-mono text-xs hover:bg-slate-700 transition cursor-pointer"
+                    >
+                      deepseek-chat
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                    <input
+                      type="text"
+                      placeholder="مدل دلخواه (مثلاً gpt-4o-mini)"
+                      value={customBatchModelInput}
+                      onChange={(e) => setCustomBatchModelInput(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-amber-400 w-full sm:w-52"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleBatchSwitchModel(customBatchModelInput)}
+                      disabled={isSwitchingBatchModel || !customBatchModelInput.trim()}
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs shrink-0 cursor-pointer"
+                    >
+                      اعمال مدل
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* API Keys Table */}
             <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
               <div className="overflow-x-auto">
                 <table className="w-full text-right text-xs">
                   <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold">
                     <tr>
+                      <th className="py-3.5 px-3 text-center w-10">
+                        <input
+                          type="checkbox"
+                          checked={apiKeys.length > 0 && selectedKeyIds.length === apiKeys.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedKeyIds(apiKeys.map(k => k.id));
+                            } else {
+                              setSelectedKeyIds([]);
+                            }
+                          }}
+                          className="rounded border-slate-700 text-amber-500 focus:ring-amber-400 cursor-pointer w-3.5 h-3.5"
+                          title="انتخاب یا لغو انتخاب تمام کلیدها"
+                        />
+                      </th>
                       <th className="py-3.5 px-4">عنوان کلید / سرور</th>
                       <th className="py-3.5 px-4">ارائه‌دهنده و مدل</th>
                       <th className="py-3.5 px-4">وضعیت</th>
@@ -4988,9 +5147,22 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
                       const totalTokens = k.totalTokensUsed || 0;
                       const totalCostUsd = k.totalCostUsd ?? Number(((totalTokens / 1000000) * 0.15).toFixed(4));
                       const totalCostTomans = k.totalCostTomans ?? Math.round(totalCostUsd * 95000);
+                      const isSelected = selectedKeyIds.includes(k.id);
 
                       return (
-                        <tr key={k.id} className="hover:bg-slate-800/40 transition-colors">
+                        <tr key={k.id} className={`transition-colors ${isSelected ? 'bg-amber-500/10 hover:bg-amber-500/15' : 'hover:bg-slate-800/40'}`}>
+                          <td className="py-3.5 px-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                setSelectedKeyIds(prev =>
+                                  prev.includes(k.id) ? prev.filter(id => id !== k.id) : [...prev, k.id]
+                                );
+                              }}
+                              className="rounded border-slate-700 text-amber-500 focus:ring-amber-400 cursor-pointer w-3.5 h-3.5"
+                            />
+                          </td>
                           <td className="py-3.5 px-4 font-bold text-white">
                             <div>{k.name}</div>
                             {k.lastError && (

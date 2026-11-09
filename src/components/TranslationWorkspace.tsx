@@ -798,30 +798,53 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
               {/* Translation Display Area */}
               <div className="flex-1 overflow-y-auto p-3 sm:p-5 bg-slate-950/60 flex flex-col">
                 
-                {currentChunk?.status === 'translating' ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                {currentChunk?.status === 'translating' && viewMode === 'preview' ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center p-8 my-auto">
                     <div className="w-12 h-12 rounded-full border-4 border-indigo-500/30 border-t-indigo-500 animate-spin mb-4" />
                     <h4 className="text-sm font-bold text-slate-200">درحال ترجمه هوشمند این بخش...</h4>
                     <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                      مدل جمینای در حال اعمال لحن «{project.tone}»، تطبیق واژه‌نامه تخصصی و استایل‌بندی است.
+                      مدل هوش مصنوعی در حال اعمال لحن «{project.tone}»، تطبیق واژه‌نامه تخصصی و استایل‌بندی است.
                     </p>
+                    <button
+                      onClick={() => setViewMode('plain')}
+                      className="mt-4 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 transition flex items-center gap-1.5"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                      <span>وارد کردن دستی متن در حین انتظار</span>
+                    </button>
                   </div>
-                ) : currentChunk?.status === 'error' ? (
+                ) : currentChunk?.status === 'error' && viewMode === 'preview' ? (
                   <div className="max-w-md mx-auto p-5 sm:p-6 bg-red-500/10 border border-red-500/30 rounded-2xl text-center space-y-3.5 my-auto">
                     <div className="w-10 h-10 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center mx-auto">
                       <Sparkles className="w-5 h-5" />
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-red-300">خطا در فرآیند ترجمه این بخش</div>
+                      <div className="text-sm font-bold text-red-300">
+                        {currentChunk.errorMessage?.toLowerCase().includes('safety') || currentChunk.errorMessage?.includes('فیلتر') || currentChunk.errorMessage?.includes('censorship')
+                          ? 'توقف به دلیل فیلتر محتوایی یا حساسیت متن'
+                          : 'خطا در فرآیند ترجمه این بخش'}
+                      </div>
                       <p className="text-xs text-red-200/90 mt-1 leading-relaxed">
                         {currentChunk.errorMessage || 'مشکل در برقراری ارتباط با مدل هوش مصنوعی'}
+                      </p>
+                      <p className="text-[11px] text-amber-300/90 mt-2 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20 leading-relaxed text-right">
+                        💡 <strong>راهکار سریع:</strong> می‌توانید با کلیک روی دکمه «ویرایش دستی»، متن فارسی این بخش را شخصاً تایپ یا الصاق (Paste) نمایید تا این صفحه فوراً تکمیل گردد و کتاب کامل شود.
                       </p>
                     </div>
 
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
                       <button
+                        onClick={() => setViewMode('plain')}
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 cursor-pointer"
+                        title="وارد کردن یا ویرایش مستقیم متن فارسی برای این بخش"
+                      >
+                        <Edit3 className="w-3.5 h-3.5 text-slate-950" />
+                        <span>ویرایش دستی متن فارسی</span>
+                      </button>
+
+                      <button
                         onClick={onTranslateCurrentChunk}
-                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20"
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 cursor-pointer"
                       >
                         <RotateCw className="w-3.5 h-3.5" />
                         <span>تلاش مجدد</span>
@@ -838,7 +861,7 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
                       )}
                     </div>
                   </div>
-                ) : currentChunk?.translatedHtml ? (
+                ) : (currentChunk?.translatedHtml || viewMode !== 'preview') ? (
                   <>
                     {/* Excluded From Book Notice Banner */}
                     {currentChunk?.isExcludedFromBook && (
@@ -979,7 +1002,7 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
                       >
                         <div
                           className="book-render-content"
-                          dangerouslySetInnerHTML={{ __html: currentChunk.translatedHtml }}
+                          dangerouslySetInnerHTML={{ __html: currentChunk?.translatedHtml || '' }}
                         />
                       </div>
                     </div>
@@ -1168,10 +1191,11 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
                         </button>
                       </div>
                       <textarea
-                        value={currentChunk.translatedHtml}
-                        onChange={e => onUpdateChunkHtml(currentChunk.id, e.target.value)}
+                        value={currentChunk?.translatedHtml || ''}
+                        onChange={e => currentChunk && onUpdateChunkHtml(currentChunk.id, e.target.value)}
                         className="flex-1 w-full bg-slate-900 border border-slate-700 rounded-xl p-4 text-xs font-mono text-emerald-300 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed min-h-[300px]"
                         dir="ltr"
+                        placeholder="<p>کدهای HTML یا متن ترجمه را در اینجا وارد نمایید...</p>"
                       />
                     </div>
                   )}
@@ -1181,16 +1205,25 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
                   <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-500 my-auto">
                     <Sparkles className="w-10 h-10 text-slate-600 mb-3" />
                     <h4 className="text-sm font-bold text-slate-300">این بخش هنوز ترجمه نشده است</h4>
-                    <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
-                      روی دکمه «ترجمه این صفحه» کلیک کنید تا هوش مصنوعی متن را با فرمت کتابی آماده کند.
+                    <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4 leading-relaxed">
+                      می‌توانید ترجمه هوشمند این صفحه را با هوش مصنوعی آغاز کنید یا متن فارسی را مستقیماً به صورت دستی تایپ یا الصاق نمایید.
                     </p>
-                    <button
-                      onClick={onTranslateCurrentChunk}
-                      className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-2 shadow-lg shadow-indigo-600/20"
-                    >
-                      <Sparkles className="w-4 h-4 text-amber-300" />
-                      <span>شروع ترجمه این صفحه</span>
-                    </button>
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
+                      <button
+                        onClick={onTranslateCurrentChunk}
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4 text-amber-300" />
+                        <span>شروع ترجمه این صفحه</span>
+                      </button>
+                      <button
+                        onClick={() => setViewMode('plain')}
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 transition flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Edit3 className="w-4 h-4 text-amber-400" />
+                        <span>وارد کردن دستی متن فارسی</span>
+                      </button>
+                    </div>
                   </div>
                 )}
 
