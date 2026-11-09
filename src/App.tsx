@@ -585,7 +585,12 @@ export default function App() {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`/api/books/${targetId}`, { headers });
+      // 15-second timeout safeguard so a stalled network request never freezes the page
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch(`/api/books/${targetId}`, { headers, signal: controller.signal });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
         if (data.book) {
@@ -595,26 +600,36 @@ export default function App() {
             ? currentBook.chunks
             : (existingHasChunks ? existing.chunks : []);
 
-          // Safe chunk-level merge: NEVER wipe out an already translated chunk with an empty string!
-          const mergedChunks = serverChunks.length > 0
-            ? serverChunks.map((sc: BookChunk) => {
-                const localMatch = localChunks.find((lc) => lc.id === sc.id || (lc.chunkNumber === sc.chunkNumber && lc.chapterNumber === sc.chapterNumber));
-                const localHasHtml = Boolean(localMatch?.translatedHtml && typeof localMatch.translatedHtml === 'string' && localMatch.translatedHtml.trim().length > 0);
-                const serverHasHtml = Boolean(sc.translatedHtml && typeof sc.translatedHtml === 'string' && sc.translatedHtml.trim().length > 0);
+          // Fast O(N) Map-based chunk-level merge: NEVER wipe out an already translated chunk with an empty string!
+          let mergedChunks: BookChunk[];
+          if (serverChunks.length > 0) {
+            const localMapById = new Map<string, BookChunk>();
+            const localMapByNum = new Map<string, BookChunk>();
+            for (const lc of localChunks) {
+              if (lc.id) localMapById.set(lc.id, lc);
+              localMapByNum.set(`${lc.chapterNumber}_${lc.chunkNumber}`, lc);
+            }
 
-                if (localHasHtml && !serverHasHtml) {
-                  return {
-                    ...sc,
-                    translatedHtml: localMatch!.translatedHtml,
-                    status: (localMatch!.status === 'completed' ? 'completed' : sc.status) as any,
-                    translatedAt: localMatch!.translatedAt || sc.translatedAt,
-                    keyUsed: localMatch!.keyUsed || sc.keyUsed,
-                    modelUsed: localMatch!.modelUsed || sc.modelUsed,
-                  };
-                }
-                return sc;
-              })
-            : localChunks;
+            mergedChunks = serverChunks.map((sc: BookChunk) => {
+              const localMatch = localMapById.get(sc.id) || localMapByNum.get(`${sc.chapterNumber}_${sc.chunkNumber}`);
+              const localHasHtml = Boolean(localMatch?.translatedHtml && typeof localMatch.translatedHtml === 'string' && localMatch.translatedHtml.trim().length > 0);
+              const serverHasHtml = Boolean(sc.translatedHtml && typeof sc.translatedHtml === 'string' && sc.translatedHtml.trim().length > 0);
+
+              if (localHasHtml && !serverHasHtml) {
+                return {
+                  ...sc,
+                  translatedHtml: localMatch!.translatedHtml,
+                  status: (localMatch!.status === 'completed' ? 'completed' : sc.status) as any,
+                  translatedAt: localMatch!.translatedAt || sc.translatedAt,
+                  keyUsed: localMatch!.keyUsed || sc.keyUsed,
+                  modelUsed: localMatch!.modelUsed || sc.modelUsed,
+                };
+              }
+              return sc;
+            });
+          } else {
+            mergedChunks = localChunks;
+          }
 
           const fullBook: BookProject = {
             ...data.book,
