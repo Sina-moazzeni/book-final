@@ -7,6 +7,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, '../data');
 const DB_FILE = path.resolve(DATA_DIR, 'database.json');
+const DB_BACKUP_FILE = path.resolve(DATA_DIR, 'database.backup.json');
+const PERSISTENT_KEYS_FILE = path.resolve(DATA_DIR, 'persistent_keys.json');
+const PERSISTENT_USERS_FILE = path.resolve(DATA_DIR, 'persistent_users.json');
+const PERSISTENT_SETTINGS_FILE = path.resolve(DATA_DIR, 'persistent_settings.json');
+const BACKUPS_DIR = path.resolve(DATA_DIR, 'backups');
 const BOOKS_DIR = path.resolve(DATA_DIR, 'books');
 
 export type UserRole = 'admin' | 'staff' | 'publisher' | 'user';
@@ -987,111 +992,153 @@ class Database {
     if (!fs.existsSync(BOOKS_DIR)) {
       fs.mkdirSync(BOOKS_DIR, { recursive: true });
     }
+    if (!fs.existsSync(BACKUPS_DIR)) {
+      fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+    }
   }
 
   private loadData(): DatabaseSchema {
-    let schema: DatabaseSchema;
+    let schema: DatabaseSchema | null = null;
 
+    // 1. Primary Load: Attempt to load from database.json
     if (fs.existsSync(DB_FILE)) {
       try {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        schema = {
-          users: parsed.users || [],
-          books: parsed.books || [],
-          jobs: parsed.jobs || [],
-          transactions: parsed.transactions || [],
-          apiKeys: parsed.apiKeys || [],
-          customPages: parsed.customPages && parsed.customPages.length > 0 ? parsed.customPages : DEFAULT_CUSTOM_PAGES,
-          blogPosts: parsed.blogPosts && parsed.blogPosts.length > 0 ? parsed.blogPosts : DEFAULT_BLOG_POSTS,
-          blogCategories: parsed.blogCategories && parsed.blogCategories.length > 0 ? parsed.blogCategories : DEFAULT_BLOG_CATEGORIES,
-          otpStore: parsed.otpStore || {},
-          sessions: parsed.sessions || {},
-          settings: {
-            ...DEFAULT_SETTINGS,
-            ...(parsed.settings || {}),
-            pricing: {
-              ...DEFAULT_SETTINGS.pricing,
-              ...(parsed.settings?.pricing || {}),
-            },
-            gateways: {
-              ...DEFAULT_SETTINGS.gateways,
-              ...(parsed.settings?.gateways || {}),
-              zarinpal: {
-                ...DEFAULT_SETTINGS.gateways.zarinpal,
-                ...(parsed.settings?.gateways?.zarinpal || {}),
-              },
-              bitpay: {
-                ...DEFAULT_SETTINGS.gateways.bitpay,
-                ...(parsed.settings?.gateways?.bitpay || {}),
-              },
-              zibal: {
-                ...DEFAULT_SETTINGS.gateways.zibal,
-                ...(parsed.settings?.gateways?.zibal || {}),
-              },
-              nextpay: {
-                ...DEFAULT_SETTINGS.gateways.nextpay,
-                ...(parsed.settings?.gateways?.nextpay || {}),
-              },
-              idpay: {
-                ...DEFAULT_SETTINGS.gateways.idpay,
-                ...(parsed.settings?.gateways?.idpay || {}),
-              },
-              stripe: {
-                ...DEFAULT_SETTINGS.gateways.stripe,
-                ...(parsed.settings?.gateways?.stripe || {}),
-              },
-            },
-            announcementBar: {
-              ...DEFAULT_SETTINGS.announcementBar,
-              ...(parsed.settings?.announcementBar || {}),
-            },
-            security: {
-              ...DEFAULT_SETTINGS.security,
-              ...(parsed.settings?.security || {}),
-              captcha: {
-                ...DEFAULT_SETTINGS.security.captcha,
-                ...(parsed.settings?.security?.captcha || {}),
-              },
-              googleOAuth: {
-                ...DEFAULT_SETTINGS.security.googleOAuth,
-                ...(parsed.settings?.security?.googleOAuth || {}),
-              },
-            },
-            seo: {
-              ...DEFAULT_SETTINGS.seo,
-              ...(parsed.settings?.seo || {}),
-              robotsTxt: parsed.settings?.seo?.robotsTxt || DEFAULT_ROBOTS_TXT,
-              llmsTxt: parsed.settings?.seo?.llmsTxt || DEFAULT_LLMS_TXT,
-            },
-            sms: {
-              ...DEFAULT_SETTINGS.sms,
-              ...(parsed.settings?.sms || {}),
-              apiKey: parsed.settings?.sms?.apiKey || 'e0d8fbb9-fbf5-4082-b02f-80b6fb478407',
-            },
-            headerFooter: {
-              ...DEFAULT_SETTINGS.headerFooter,
-              ...(parsed.settings?.headerFooter || {}),
-            },
-            scriptsInjection: {
-              ...DEFAULT_SETTINGS.scriptsInjection,
-              ...(parsed.settings?.scriptsInjection || {}),
-            },
-            cms: {
-              ...DEFAULT_SETTINGS.cms,
-              ...(parsed.settings?.cms || {}),
-              sections: (parsed.settings?.cms?.sections && Array.isArray(parsed.settings.cms.sections) && parsed.settings.cms.sections.length > 0)
-                ? parsed.settings.cms.sections
-                : DEFAULT_LANDING_SECTIONS,
-            },
-          },
-        };
+        if (raw && raw.trim().startsWith('{')) {
+          schema = JSON.parse(raw);
+        }
       } catch (err) {
-        console.error('Error reading database file, initializing defaults:', err);
-        schema = this.createDefaultSeed();
+        console.error('[DB] Error parsing primary database.json:', err);
       }
-    } else {
+    }
+
+    // 2. Secondary Failover: Attempt to load from database.backup.json
+    if (!schema && fs.existsSync(DB_BACKUP_FILE)) {
+      try {
+        const rawBackup = fs.readFileSync(DB_BACKUP_FILE, 'utf-8');
+        if (rawBackup && rawBackup.trim().startsWith('{')) {
+          console.warn('[DB] Restoring database state from secondary database.backup.json');
+          schema = JSON.parse(rawBackup);
+        }
+      } catch (err) {
+        console.error('[DB] Error parsing backup database.backup.json:', err);
+      }
+    }
+
+    // 3. Tertiary Failover: Attempt to find the newest hourly snapshot in backups/
+    if (!schema && fs.existsSync(BACKUPS_DIR)) {
+      try {
+        const snapshotFiles = fs.readdirSync(BACKUPS_DIR).filter(f => f.endsWith('.json')).sort().reverse();
+        if (snapshotFiles.length > 0) {
+          const newestSnapshot = path.resolve(BACKUPS_DIR, snapshotFiles[0]);
+          const rawSnap = fs.readFileSync(newestSnapshot, 'utf-8');
+          if (rawSnap && rawSnap.trim().startsWith('{')) {
+            console.warn(`[DB] Restoring database state from snapshot ${snapshotFiles[0]}`);
+            schema = JSON.parse(rawSnap);
+          }
+        }
+      } catch (err) {
+        console.error('[DB] Error searching backup snapshots:', err);
+      }
+    }
+
+    // 4. Default Seed if all fails
+    if (!schema) {
       schema = this.createDefaultSeed();
+    }
+
+    // Ensure all required top-level arrays exist
+    if (!Array.isArray(schema.users)) schema.users = [];
+    if (!Array.isArray(schema.books)) schema.books = [];
+    if (!Array.isArray(schema.jobs)) schema.jobs = [];
+    if (!Array.isArray(schema.transactions)) schema.transactions = [];
+    if (!Array.isArray(schema.apiKeys)) schema.apiKeys = [];
+    if (!schema.otpStore) schema.otpStore = {};
+    if (!schema.sessions) schema.sessions = {};
+    if (!schema.settings) {
+      schema.settings = { ...DEFAULT_SETTINGS };
+    } else {
+      schema.settings = {
+        ...DEFAULT_SETTINGS,
+        ...schema.settings,
+        pricing: { ...DEFAULT_SETTINGS.pricing, ...(schema.settings.pricing || {}) },
+        gateways: { ...DEFAULT_SETTINGS.gateways, ...(schema.settings.gateways || {}) },
+        announcementBar: {
+          ...DEFAULT_SETTINGS.announcementBar,
+          ...(schema.settings.announcementBar || {}),
+          enabled: schema.settings.announcementBar?.enabled ?? (DEFAULT_SETTINGS.announcementBar?.enabled ?? true),
+          text: schema.settings.announcementBar?.text ?? (DEFAULT_SETTINGS.announcementBar?.text ?? ''),
+          type: schema.settings.announcementBar?.type ?? (DEFAULT_SETTINGS.announcementBar?.type ?? 'info'),
+        },
+        security: { ...DEFAULT_SETTINGS.security, ...(schema.settings.security || {}) },
+        seo: {
+          ...DEFAULT_SETTINGS.seo,
+          ...(schema.settings.seo || {}),
+          siteTitle: schema.settings.seo?.siteTitle ?? (DEFAULT_SETTINGS.seo?.siteTitle ?? 'مترجم و ویراستار هوشمند کتاب'),
+          metaDescription: schema.settings.seo?.metaDescription ?? (DEFAULT_SETTINGS.seo?.metaDescription ?? ''),
+          metaKeywords: schema.settings.seo?.metaKeywords ?? (DEFAULT_SETTINGS.seo?.metaKeywords ?? ''),
+          announcementEnabled: schema.settings.seo?.announcementEnabled ?? (DEFAULT_SETTINGS.seo?.announcementEnabled ?? true),
+          announcementText: schema.settings.seo?.announcementText ?? (DEFAULT_SETTINGS.seo?.announcementText ?? ''),
+        },
+        sms: { ...DEFAULT_SETTINGS.sms, ...(schema.settings.sms || {}) },
+        cms: { ...DEFAULT_SETTINGS.cms, ...(schema.settings.cms || {}) },
+      };
+    }
+
+    // 5. INDESTRUCTIBLE MERGE: Restore persistent API keys if present
+    if (fs.existsSync(PERSISTENT_KEYS_FILE)) {
+      try {
+        const rawKeys = fs.readFileSync(PERSISTENT_KEYS_FILE, 'utf-8');
+        const savedKeys: ApiKeyConfig[] = JSON.parse(rawKeys);
+        if (Array.isArray(savedKeys) && savedKeys.length > 0) {
+          const existingKeyIds = new Set(schema.apiKeys.map(k => k.id));
+          const existingKeyValues = new Set(schema.apiKeys.map(k => (k.apiKey || '').trim()));
+          for (const k of savedKeys) {
+            const keyVal = (k.apiKey || '').trim();
+            if (!existingKeyIds.has(k.id) && keyVal && !existingKeyValues.has(keyVal)) {
+              schema.apiKeys.push(k);
+              existingKeyIds.add(k.id);
+              existingKeyValues.add(keyVal);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[DB] Error merging persistent_keys.json:', err);
+      }
+    }
+
+    // 6. INDESTRUCTIBLE MERGE: Restore persistent users if present
+    if (fs.existsSync(PERSISTENT_USERS_FILE)) {
+      try {
+        const rawUsers = fs.readFileSync(PERSISTENT_USERS_FILE, 'utf-8');
+        const savedUsers: User[] = JSON.parse(rawUsers);
+        if (Array.isArray(savedUsers) && savedUsers.length > 0) {
+          const existingUserIds = new Set(schema.users.map(u => u.id));
+          for (const u of savedUsers) {
+            const idx = schema.users.findIndex(ex => ex.id === u.id || (u.phone && ex.phone === u.phone) || (u.email && ex.email === u.email));
+            if (idx === -1) {
+              schema.users.push(u);
+              existingUserIds.add(u.id);
+            } else {
+              // Preserve highest wallet balance and custom rates
+              schema.users[idx].walletBalance = Math.max(schema.users[idx].walletBalance || 0, u.walletBalance || 0);
+              if (u.customCostPerWord !== undefined) schema.users[idx].customCostPerWord = u.customCostPerWord;
+              if (u.discountPercent !== undefined) schema.users[idx].discountPercent = u.discountPercent;
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[DB] Error merging persistent_users.json:', err);
+      }
+    }
+
+    // 7. SELF-HEALING DISK BOOK SCANNER:
+    // If the server was git-pulled or database.json was reset, scan data/books/*.json
+    // to automatically recover any orphaned books that exist on disk!
+    try {
+      this.scanAndRecoverOrphanedBooks(schema);
+    } catch (err) {
+      console.error('[DB] Error during disk book recovery scan:', err);
     }
 
     // Migrate & decouple any heavy book chunks into individual files to keep database.json ultra-fast & lightweight (<100KB)
@@ -1125,16 +1172,6 @@ class Database {
           }
         }
       });
-    }
-
-    // Purge any ghost/dummy recovered books from database schema
-    if (Array.isArray(schema.books)) {
-      schema.books = schema.books.filter(
-        (b) =>
-          b.title !== 'کتاب بازیابی شده' &&
-          b.originalTitle !== 'Recovered Book' &&
-          b.title !== 'کتاب بدون عنوان'
-      );
     }
 
     // Ensure Default Permanent Seed Users ALWAYS exist and have known credentials
@@ -1533,13 +1570,165 @@ class Database {
     };
   }
 
+  private lastSnapshotTime: number = 0;
+
+  /**
+   * Scans data/books/*.json to recover any books that exist on disk but are missing from schema.books
+   * (e.g. after git pull, server migration, or database.json reset).
+   */
+  public scanAndRecoverOrphanedBooks(targetSchema?: DatabaseSchema): number {
+    const s = targetSchema || this.data;
+    if (!fs.existsSync(BOOKS_DIR)) return 0;
+    let recoveredCount = 0;
+
+    try {
+      const files = fs.readdirSync(BOOKS_DIR);
+      const existingBookIds = new Set(s.books.map((b) => b.id));
+
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue;
+        const bookId = file.replace('.json', '');
+        if (existingBookIds.has(bookId)) continue;
+
+        try {
+          const filePath = path.resolve(BOOKS_DIR, file);
+          const raw = fs.readFileSync(filePath, 'utf-8');
+          const bookData = JSON.parse(raw);
+          const chunks = Array.isArray(bookData.chunks) ? bookData.chunks : [];
+          if (chunks.length === 0 && !bookData.adminCopy) continue;
+
+          const totalChunks = chunks.length;
+          const completedChunks = chunks.filter((c: any) => c.status === 'completed' || Boolean(c.translatedHtml)).length;
+          const totalWords = chunks.reduce((acc: number, c: any) => acc + (c.wordCount || 0), 0);
+          const totalImages = chunks.reduce((acc: number, c: any) => acc + (c.imageCount || (c.hasImages ? 1 : 0)), 0);
+
+          // Infer title from first chapter, adminCopy, or bookId
+          let inferredTitle = bookData.adminCopy?.title || chunks[0]?.chapterTitle || `کتاب ${bookId.slice(-6)}`;
+          if (inferredTitle.length > 80) inferredTitle = inferredTitle.slice(0, 80) + '...';
+
+          const recoveredBook: BookRecord = {
+            id: bookId,
+            userId: 'usr_admin_default',
+            title: inferredTitle,
+            originalTitle: inferredTitle,
+            author: 'نامشخص',
+            translator: 'سامانه ترجمه',
+            tone: 'spiritual',
+            wordCount: totalWords || 1000,
+            estimatedCost: (totalWords || 1000) * 45,
+            status: completedChunks === totalChunks && totalChunks > 0 ? 'completed' : 'translating',
+            chunks: [],
+            totalChunks,
+            completedChunks,
+            totalImagesCount: totalImages,
+            progressPercent: totalChunks > 0 ? Math.round((completedChunks / totalChunks) * 100) : 0,
+            createdAt: Date.now() - 86400000,
+            updatedAt: Date.now(),
+          };
+
+          s.books.push(recoveredBook);
+          existingBookIds.add(bookId);
+          recoveredCount++;
+          console.log(`[DB] Successfully recovered book from disk: ${bookId} ("${inferredTitle}")`);
+        } catch (readErr) {
+          console.warn(`[DB] Error parsing book file ${file}:`, readErr);
+        }
+      }
+
+      if (recoveredCount > 0 && !targetSchema) {
+        this.saveData(this.data);
+      }
+    } catch (dirErr) {
+      console.error('[DB] Error scanning books directory:', dirErr);
+    }
+
+    return recoveredCount;
+  }
+
   private saveData(data: DatabaseSchema) {
     try {
+      // 1. Primary Atomic Write to database.json
       const tempFile = `${DB_FILE}.tmp`;
-      fs.writeFileSync(tempFile, JSON.stringify(data), 'utf-8');
+      const serialized = JSON.stringify(data);
+      fs.writeFileSync(tempFile, serialized, 'utf-8');
       fs.renameSync(tempFile, DB_FILE);
+
+      // 2. Synchronous Shadow Backup (Never git-tracked, protects against git pull/merge)
+      try {
+        fs.writeFileSync(DB_BACKUP_FILE, serialized, 'utf-8');
+      } catch (errBackup) {
+        console.warn('[DB] Warning: Failed to sync secondary database.backup.json:', errBackup);
+      }
+
+      // 3. Isolated Persistent API Keys Storage (Protected forever across any update)
+      if (Array.isArray(data.apiKeys) && data.apiKeys.length > 0) {
+        try {
+          fs.writeFileSync(PERSISTENT_KEYS_FILE, JSON.stringify(data.apiKeys, null, 2), 'utf-8');
+        } catch (errKeys) {
+          console.warn('[DB] Warning: Failed to sync persistent_keys.json:', errKeys);
+        }
+      }
+
+      // 4. Isolated Persistent Users Storage (Never lose custom balances, rates or users)
+      if (Array.isArray(data.users) && data.users.length > 0) {
+        try {
+          fs.writeFileSync(PERSISTENT_USERS_FILE, JSON.stringify(data.users, null, 2), 'utf-8');
+        } catch (errUsers) {
+          console.warn('[DB] Warning: Failed to sync persistent_users.json:', errUsers);
+        }
+      }
+
+      // 5. Hourly Rotating Backup Snapshots in data/backups/
+      const now = Date.now();
+      if (now - this.lastSnapshotTime > 3600000) { // Every 1 hour
+        this.lastSnapshotTime = now;
+        try {
+          if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+          const snapName = `backup_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          fs.writeFileSync(path.resolve(BACKUPS_DIR, snapName), serialized, 'utf-8');
+
+          // Keep max 24 snapshots
+          const snaps = fs.readdirSync(BACKUPS_DIR).filter(f => f.startsWith('backup_') && f.endsWith('.json')).sort();
+          if (snaps.length > 24) {
+            for (let i = 0; i < snaps.length - 24; i++) {
+              try { fs.unlinkSync(path.resolve(BACKUPS_DIR, snaps[i])); } catch (e) {}
+            }
+          }
+        } catch (errSnap) {
+          console.warn('[DB] Warning: Failed to write snapshot:', errSnap);
+        }
+      }
     } catch (err) {
-      console.error('Failed to save database atomically:', err);
+      console.error('[DB] Critical failure saving database atomically:', err);
+    }
+  }
+
+  /**
+   * Restores database state from a provided backup JSON object or string.
+   */
+  public restoreFromBackup(backupData: DatabaseSchema | string): { success: boolean; message: string } {
+    try {
+      const parsed: DatabaseSchema = typeof backupData === 'string' ? JSON.parse(backupData) : backupData;
+      if (!parsed || !Array.isArray(parsed.users) || !Array.isArray(parsed.books)) {
+        return { success: false, message: 'ساختار فایل پشتیبان نامعتبر است (آرایه‌های کاربران و کتاب‌ها یافت نشد).' };
+      }
+
+      // Merge data
+      this.data.users = parsed.users;
+      this.data.books = parsed.books;
+      if (Array.isArray(parsed.apiKeys)) this.data.apiKeys = parsed.apiKeys;
+      if (Array.isArray(parsed.transactions)) this.data.transactions = parsed.transactions;
+      if (Array.isArray(parsed.customPages)) this.data.customPages = parsed.customPages;
+      if (Array.isArray(parsed.blogPosts)) this.data.blogPosts = parsed.blogPosts;
+      if (parsed.settings) {
+        this.data.settings = { ...this.data.settings, ...parsed.settings };
+      }
+
+      // Save immediately across all stores
+      this.saveData(this.data);
+      return { success: true, message: `پشتیبان با موفقیت بازیابی شد (${parsed.books.length} کتاب، ${parsed.apiKeys?.length || 0} کلید API، ${parsed.users.length} کاربر).` };
+    } catch (err: any) {
+      return { success: false, message: `خطا در بازیابی پشتیبان: ${err?.message || err}` };
     }
   }
 
@@ -2350,6 +2539,7 @@ class Database {
         books: fullBooks,
         jobs: this.data.jobs,
         transactions: this.data.transactions,
+        apiKeys: this.data.apiKeys,
         settings: this.data.settings,
         customPages: this.data.customPages || [],
         blogPosts: this.data.blogPosts || [],
@@ -2481,6 +2671,24 @@ class Database {
         if (!inTx || !inTx.id) return;
         if (!this.data.transactions.some(t => t.id === inTx.id)) {
           this.data.transactions.push(inTx);
+        }
+      });
+    }
+
+    // 8. Restore API Keys if present
+    let restoredApiKeys = 0;
+    if (Array.isArray(incoming.apiKeys)) {
+      if (!this.data.apiKeys) this.data.apiKeys = [];
+      const existingKeyIds = new Set(this.data.apiKeys.map(k => k.id));
+      const existingValues = new Set(this.data.apiKeys.map(k => (k.apiKey || '').trim()));
+      incoming.apiKeys.forEach((inKey: ApiKeyConfig) => {
+        const keyVal = (inKey.apiKey || (inKey as any).key || '').trim();
+        if (!keyVal) return;
+        if (!existingKeyIds.has(inKey.id) && !existingValues.has(keyVal)) {
+          this.data.apiKeys.push({ ...inKey, apiKey: keyVal });
+          existingKeyIds.add(inKey.id);
+          existingValues.add(keyVal);
+          restoredApiKeys++;
         }
       });
     }
