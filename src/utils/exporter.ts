@@ -231,21 +231,23 @@ export function sanitizeTranslatedHtml(html: string): string {
       .replace(/(?:<p[^>]*>)?\s*(?:Please provide the text|If you provide the text|Waiting for the text)[\s\S]*?(?:<\/p>)?/gi, '')
       .trim();
 
-    // Deduplicate identical images in chunk HTML safely
-    const seenSrcs = new Set<string>();
-    sanitized = sanitized.replace(
-      /(?:<div[^>]*class="[^"]*book-illustration-wrap[^"]*"[^>]*>[\s\S]*?<img\s+[^>]*src=["']([^"']+)["'][^>]*>[\s\S]*?<\/div>|<figure[^>]*>[\s\S]*?<img\s+[^>]*src=["']([^"']+)["'][^>]*>[\s\S]*?<\/figure>|<img\s+[^>]*src=["']([^"']+)["'][^>]*>)/gi,
-      (wholeMatch, src1, src2, src3) => {
-        const src = src1 || src2 || src3;
-        if (!src) return wholeMatch;
+    // Fast & safe non-backtracking image deduplication
+    if (sanitized.includes('<img')) {
+      const seenSrcs = new Set<string>();
+      sanitized = sanitized.replace(/<img\s+[^>]*src=["']([^"']+)["'][^>]*>/gi, (match, src) => {
+        if (!src) return match;
         const fingerprint = src.length > 250 ? src.slice(0, 250) : src;
         if (seenSrcs.has(fingerprint)) {
           return '';
         }
         seenSrcs.add(fingerprint);
-        return wholeMatch;
-      }
-    );
+        return match;
+      });
+      // Clean up empty figure or wrapper divs leftover after image removal
+      sanitized = sanitized
+        .replace(/<figure[^>]*>\s*<\/figure>/gi, '')
+        .replace(/<div class="[^"]*book-illustration-wrap[^"]*">\s*<\/div>/gi, '');
+    }
 
     // Format footnotes and references into distinct publication styling
     sanitized = formatFootnotesAndReferences(sanitized);

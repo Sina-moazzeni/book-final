@@ -1854,6 +1854,35 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
     reader.readAsText(file);
   };
 
+  const [isScanningDisk, setIsScanningDisk] = useState(false);
+  const handleScanDiskBooks = async () => {
+    setIsScanningDisk(true);
+    try {
+      const res = await fetch('/api/admin/backup/scan-books', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'خطا در اسکن دیسک');
+      setSettingsToast({
+        type: 'success',
+        message: data.message,
+      });
+      fetchAllBooks();
+      fetchOverview();
+    } catch (err: any) {
+      setSettingsToast({
+        type: 'error',
+        message: err.message || 'خطا در بازیابی کتاب‌ها از روی دیسک',
+      });
+    } finally {
+      setIsScanningDisk(false);
+    }
+  };
+
   // Fetch Monthly Analytics
   const fetchMonthlyAnalytics = async () => {
     setLoadingMonthly(true);
@@ -10410,16 +10439,16 @@ AIzaSyC...`}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
                 {/* Action 1: Direct Download in Browser */}
                 <div className="bg-slate-950/70 p-4 sm:p-5 rounded-2xl border border-slate-800/90 flex flex-col justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-bold text-white mb-1">
                       <Download className="w-4 h-4 text-emerald-400" />
-                      <span>دانلود مستقیم فایل پشتیبان در مرورگر</span>
+                      <span>دانلود مستقیم فایل پشتیبان</span>
                     </div>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      دریافت آنی فایل JSON شامل کاربران، کتاب‌ها، چانک‌های ترجمه‌شده، سوابق مالی، کوپن‌ها و تنظیمات روی کامپیوتر شما.
+                      دریافت آنی فایل کامل JSON شامل کلیدها، کاربران، کتاب‌ها، چانک‌های ترجمه‌شده، سوابق مالی و تنظیمات روی سیستم شما.
                     </p>
                   </div>
                   <button
@@ -10429,7 +10458,7 @@ AIzaSyC...`}
                     className="w-full px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-xs flex items-center justify-center gap-2 transition shadow-md shadow-emerald-500/10 disabled:opacity-50"
                   >
                     {isDownloadingBackup ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                    <span>{isDownloadingBackup ? 'در حال آماده‌سازی و دانلود فایل...' : 'دانلود فایل پشتیبان (JSON)'}</span>
+                    <span>{isDownloadingBackup ? 'در حال آماده‌سازی...' : 'دانلود فایل پشتیبان (JSON)'}</span>
                   </button>
                 </div>
 
@@ -10438,16 +10467,16 @@ AIzaSyC...`}
                   <div>
                     <div className="flex items-center gap-2 text-sm font-bold text-white mb-1">
                       <Upload className="w-4 h-4 text-indigo-400" />
-                      <span>ایمپورت و بازیابی فایل پشتیبان (Restore)</span>
+                      <span>ایمپورت و بازیابی (Restore)</span>
                     </div>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      انتخاب فایل پشتیبان JSON برای بازگردانی و ادغام امن کتاب‌ها، کاربران و تنظیمات در پایگاه داده سرور.
+                      انتخاب فایل پشتیبان JSON برای بازگردانی و ادغام امن کلیدها، کتاب‌ها، کاربران و تنظیمات در دیتابیس سرور.
                     </p>
                   </div>
                   <div>
                     <label className="w-full px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition shadow-md shadow-indigo-600/10 cursor-pointer text-center">
                       {isImportingBackup ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                      <span>{isImportingBackup ? 'در حال بازیابی اطلاعات روی سرور...' : 'انتخاب فایل JSON و بازیابی'}</span>
+                      <span>{isImportingBackup ? 'در حال بازیابی...' : 'انتخاب فایل و بازیابی'}</span>
                       <input
                         key={backupFileInputKey}
                         type="file"
@@ -10458,6 +10487,28 @@ AIzaSyC...`}
                       />
                     </label>
                   </div>
+                </div>
+
+                {/* Action 3: Self-Healing Disk Books Recovery */}
+                <div className="bg-slate-950/70 p-4 sm:p-5 rounded-2xl border border-amber-500/30 flex flex-col justify-between gap-3 bg-gradient-to-br from-amber-500/5 to-transparent">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-bold text-amber-300 mb-1">
+                      <RefreshCw className="w-4 h-4 text-amber-400" />
+                      <span>اسکن و احیای کتاب‌ها از روی دیسک</span>
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      اگر با آپدیت سرور کتاب‌ها ناپدید شدند، این دکمه پوشه <code className="text-amber-300 font-mono">data/books/</code> دیسک را اسکن کرده و تمام کتاب‌ها را زنده می‌کند.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleScanDiskBooks}
+                    disabled={isScanningDisk}
+                    className="w-full px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition shadow-md shadow-amber-500/10 disabled:opacity-50"
+                  >
+                    {isScanningDisk ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    <span>{isScanningDisk ? 'در حال اسکن فایل‌های دیسک...' : 'اسکن و احیای کتاب‌ها از دیسک'}</span>
+                  </button>
                 </div>
               </div>
             </div>

@@ -3528,6 +3528,23 @@ ${urls.map((u) => `  <url>
     }
   });
 
+  // Admin Scan & Recover Books from Disk (data/books/*.json)
+  app.post('/api/admin/backup/scan-books', requireAdmin, (_req, res) => {
+    try {
+      const recoveredCount = db.scanAndRecoverOrphanedBooks();
+      return res.json({
+        success: true,
+        recoveredCount,
+        totalBooks: db.getBooks().length,
+        message: recoveredCount > 0
+          ? `تعداد ${recoveredCount} کتاب از روی دیسک با موفقیت اسکن و به فهرست کتاب‌ها بازگردانی شدند.`
+          : 'تمام فایل‌های کتاب موجود بر روی دیسک در پایگاه داده ثبت هستند و کتاب جدیدی یافت نشد.',
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'خطا در اسکن دیسک' });
+    }
+  });
+
   // ==========================================
   // 8. CUSTOM PAGES BUILDER (HTML & SLUG)
   // ==========================================

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { BookProject } from '../types.ts';
 import { BOOK_THEMES, DEFAULT_DESIGN_CONFIG } from '../constants/themes.ts';
 import { groupChunksIntoChapters } from '../utils/exporter.ts';
@@ -13,6 +13,10 @@ export const PrintDocument: React.FC<PrintDocumentProps> = ({ project }) => {
   }
 
   const design = project.designConfig || DEFAULT_DESIGN_CONFIG;
+  const chapters = useMemo(
+    () => groupChunksIntoChapters(project.chunks, design.excludedChunkIds),
+    [project.chunks, design.excludedChunkIds]
+  );
   const defaultThemeFallback = BOOK_THEMES.spiritual || {
     id: 'spiritual',
     name: 'معنوی و عرفانی',
@@ -387,7 +391,7 @@ export const PrintDocument: React.FC<PrintDocumentProps> = ({ project }) => {
 
         {/* Chapters Content */}
         <div className="space-y-12">
-          {groupChunksIntoChapters(project.chunks, design.excludedChunkIds).map((chapter, idx, allChapters) => (
+          {chapters.map((chapter, idx, allChapters) => (
             <div
               key={chapter.chapterKey}
               className={`book-chapter-break ${design.continuousFlow === false ? 'force-page-break' : ''} pt-6 ${

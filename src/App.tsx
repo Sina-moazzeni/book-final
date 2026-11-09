@@ -422,14 +422,22 @@ export default function App() {
   }, []);
 
   // Dedicated Clean PDF Printing Handler:
+  const [isPrinting, setIsPrinting] = useState(false);
+
   // Dynamically sets document.title to the current book's title during print,
   // preventing the platform branding ("مترجم و ویراستار هوشمند کتاب...") from ever printing
   // in the PDF header, and ensuring the saved PDF file has the clean book title.
   const handlePrintPdf = useCallback(() => {
+    setIsPrinting(true);
     const previousTitle = document.title;
     const cleanTitle = project?.title?.trim() || 'کتاب';
     document.title = cleanTitle;
-    window.print();
+    // Short RAF delay so React renders PrintDocument before browser opens print dialog
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        window.print();
+      }, 100);
+    });
     setTimeout(() => {
       document.title = previousTitle;
     }, 1500);
@@ -438,12 +446,14 @@ export default function App() {
   useEffect(() => {
     let savedTitle = document.title;
     const handleBeforePrint = () => {
+      setIsPrinting(true);
       savedTitle = document.title;
       if (project?.title?.trim()) {
         document.title = project.title.trim();
       }
     };
     const handleAfterPrint = () => {
+      setIsPrinting(false);
       if (savedTitle) {
         document.title = savedTitle;
       }
@@ -1431,6 +1441,13 @@ export default function App() {
   }
 
   // ========================================================
+  // INITIAL AUTH VERIFICATION: Prevent page flash/thrashing
+  // ========================================================
+  if (isAuthLoading) {
+    return viewFallback;
+  }
+
+  // ========================================================
   // STRICT LOGIN BARRIER: If user is not authenticated
   // ========================================================
   if (!currentUser) {
@@ -1629,8 +1646,8 @@ export default function App() {
     >
       <Suspense fallback={viewFallback}>
         <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-['Vazirmatn'] selection:bg-amber-500/30">
-          {/* Printable Document for high-res PDF generation */}
-          <PrintDocument project={project} />
+          {/* Printable Document for high-res PDF generation - only mounted when printing to save CPU & memory */}
+          {isPrinting && <PrintDocument project={project} />}
 
           {/* Main Studio Interactive UI */}
           <div className="no-print flex flex-col min-h-screen">

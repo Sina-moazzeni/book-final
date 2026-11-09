@@ -11,5 +11,11 @@ coverage/
 *.zip
 .tasks/
 data/books/
+data/database.backup.json
+data/persistent_keys.json
+data/persistent_users.json
+data/persistent_settings.json
+data/backups/
+data/*.tmp
 public/assets/aistudio/
 bun.lock
