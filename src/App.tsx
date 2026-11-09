@@ -1717,8 +1717,15 @@ export default function App() {
               isLoadingChunks={loadingWorkspaceBookId === activeBookId}
               onRetryFailedChunks={handleRetryFailedChunks}
               onUpdateChunkHtml={(chunkId: string, newHtml: string) => {
+                const isFilled = typeof newHtml === 'string' && newHtml.trim().length > 0;
                 const updated = project.chunks.map((c) =>
-                  c.id === chunkId ? { ...c, translatedHtml: newHtml } : c
+                  c.id === chunkId ? {
+                    ...c,
+                    translatedHtml: newHtml,
+                    status: isFilled ? ('completed' as const) : c.status,
+                    errorMessage: isFilled ? undefined : c.errorMessage,
+                    translatedAt: isFilled ? (c.translatedAt || Date.now()) : c.translatedAt,
+                  } : c
                 );
                 handleUpdateProject({ ...project, chunks: updated });
               }}
