@@ -39,7 +39,28 @@ export function formatToDistinctParagraphs(html: string): string {
   try {
     let clean = sanitizeTranslatedHtml(html);
 
-    // If text doesn't contain any <p>, <h1>, <h2> tags at all, wrap distinct blocks into <p>
+    // 1. Table of Contents Smart Separation
+    // If text contains "فهرست مطالب" or "فهرست", extract title and separate items onto individual lines
+    if (/فهرست مطالب|فهرست/i.test(clean)) {
+      clean = clean.replace(/<p([^>]*)>\s*(?:#\s*)?(?:فهرست مطالب|فهرست)(?:[:：]|\s*<br\s*[\/]?>|\s*\n)?([\s\S]*?)<\/p>/gi, (_whole, _attrs, innerContent) => {
+        let itemsHtml = '';
+        const rawItems = innerContent
+          .split(/<br\s*[\/]?>|\n|(?=[۰-۹0-9]+[-–.])/i)
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+
+        if (rawItems.length > 1) {
+          itemsHtml = rawItems
+            .map((item: string) => `<p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">${item}</p>`)
+            .join('\n');
+        } else if (innerContent.trim()) {
+          itemsHtml = `<p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">${innerContent.trim()}</p>`;
+        }
+        return `<h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>\n${itemsHtml}`;
+      });
+    }
+
+    // 2. If text doesn't contain any <p>, <h1>, <h2> tags at all, wrap distinct blocks into <p>
     if (!/<(p|h[1-3]|blockquote|div)[\s>]/i.test(clean)) {
       const rawParagraphs = clean
         .split(/\n\s*\n/)
@@ -48,27 +69,41 @@ export function formatToDistinctParagraphs(html: string): string {
 
       return rawParagraphs
         .map(p => {
+          const lines = p.split('\n').map(l => l.trim()).filter(Boolean);
+          if (lines.length >= 2 && lines.every(l => l.length < 85)) {
+            return lines
+              .map(l => `<p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">${l}</p>`)
+              .join('\n');
+          }
           const textWithBreaks = p.replace(/\n/g, '<br/>');
           return `<p style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;">${textWithBreaks}</p>`;
         })
         .join('\n\n');
     }
 
-    // If single <p> tags contain multiple consecutive <br><br> or linebreaks, break them into separate paragraphs
+    // 3. If single <p> tags contain multiple consecutive <br><br> or linebreaks, break them into separate paragraphs
     clean = clean.replace(/<p([^>]*)>([\s\S]*?)<\/p>/gi, (match, attrs, content) => {
-      // If the paragraph has double <br> or multiple breaks, split into multiple <p>
-      if (/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n/i.test(content)) {
+      // If the paragraph has <br> or multiple breaks, split into multiple <p>
+      if (/<br\s*[\/]?>|\n/i.test(content)) {
         const parts = content
-          .split(/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n/i)
+          .split(/<br\s*[\/]?>\s*<br\s*[\/]?>|\n\s*\n|<br\s*[\/]?>|\n/i)
           .map((part: string) => part.trim())
           .filter(Boolean);
 
-        return parts
-          .map((part: string) => `<p${attrs || ' style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;"'}>${part}</p>`)
-          .join('\n\n');
+        if (parts.length > 1) {
+          const allShort = parts.every((p: string) => p.length < 90);
+          return parts
+            .map((part: string) => {
+              if (allShort) {
+                return `<p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">${part}</p>`;
+              }
+              return `<p${attrs || ' style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;"'}>${part}</p>`;
+            })
+            .join('\n\n');
+        }
       }
 
-      // Ensure margin-bottom is at least 22px in style attribute for clear separation
+      // Ensure margin-bottom is at least 24px in style attribute for clear separation
       if (!attrs.includes('margin-bottom')) {
         return `<p${attrs} style="margin-bottom: 24px; line-height: 2.2; font-size: 12.5pt; text-align: justify;">${content}</p>`;
       }
@@ -188,6 +223,12 @@ export function sanitizeTranslatedHtml(html: string): string {
       .replace(/<h[1-3][^>]*>[^<]*[\(\[\{]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}][^<]*<\/h[1-3]>/gi, '')
       .replace(/<p[^>]*>\s*[\(\[\{]?\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]?\s*<\/p>/gi, '')
       .replace(/(?:margin-right|margin-left|padding-right|padding-left|text-indent)\s*:\s*[^;"]+;?/gi, '')
+      // Strip chatbot conversational remarks and meta-fillers (e.g. "اگر متن اصلی ... را ارسال کنید...")
+      .replace(/(?:<p[^>]*>)?\s*(?:اگر|چنانچه|در\s+صورت\s+اینکه|در\s+صورتی\s+که|لطفاً|خواهشمند\s+است)\s+(?:متن\s+اصلی|متن\s+کتاب|پاراگراف‌ها|دیالوگ‌ها|ادامه\s+متن)[\s\S]*?(?:ارائه\s+می‌?کنم|ترجمه\s+خواهم\s+کرد|ارسال\s+فرمایید|ارسال\s+کنید|در\s+اختیار\s+قرار\s+دهید|خدمت\s+شما\s+ارائه\s+می‌?گردد)[.!?؟\s]*(?:<\/p>)?/gi, '')
+      .replace(/(?:<p[^>]*>)?\s*اگر\s+متن\s+اصلی\s*\([^\)]*\)\s*را\s+ارسال\s+کنید[\s\S]*?(?:<\/p>)?/gi, '')
+      .replace(/(?:<p[^>]*>)?\s*[^<]*رعایت\s+واژگان\s+تثبیت[\s\S]*?پیوند\s+ریتمیک[^<]*(?:<\/p>)?/gi, '')
+      .replace(/(?:<p[^>]*>)?\s*(?:لطفاً|خواهشمند\s+است)\s+متن\s+اصلی\s+را\s+ارسال\s+کنید[.!?؟\s]*(?:<\/p>)?/gi, '')
+      .replace(/(?:<p[^>]*>)?\s*(?:Please provide the text|If you provide the text|Waiting for the text)[\s\S]*?(?:<\/p>)?/gi, '')
       .trim();
 
     // Deduplicate identical images in chunk HTML safely
@@ -370,10 +411,34 @@ export function plainTextToHtml(plainText: string, originalHtml?: string): strin
     } else if (block.startsWith('> ') || block.startsWith('«')) {
       const quoteText = block.replace(/^>\s*/, '').trim();
       htmlParts.push(`<blockquote style="border-right: 4px solid #3182ce; padding: 12px 18px; margin: 18px 0; background: #f7fafc; color: #4a5568; font-style: italic;">${quoteText}</blockquote>`);
+    } else if (/^(?:#\s*)?(?:فهرست مطالب|فهرست)(?:[:：]|\n|$)/i.test(block)) {
+      // Dedicated Table of contents block
+      const subLines = block.split('\n').map(l => l.trim()).filter(Boolean);
+      const tocHeading = subLines[0].replace(/^#+\s*/, '').trim();
+      htmlParts.push(`<h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">${tocHeading}</h1>`);
+      for (let s = 1; s < subLines.length; s++) {
+        htmlParts.push(`<p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">${subLines[s]}</p>`);
+      }
     } else {
-      // Standard publication body paragraph with generous spacing for readability
-      const pContent = block.replace(/\n/g, '<br/>');
-      htmlParts.push(`<p style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;">${pContent}</p>`);
+      const subLines = block.split('\n').map(l => l.trim()).filter(Boolean);
+      // If block contains multiple short lines (TOC, poetry, headings, or list items)
+      if (subLines.length >= 2 && subLines.every(l => l.length < 85)) {
+        for (const line of subLines) {
+          if (line.startsWith('# ')) {
+            htmlParts.push(`<h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 22px; text-align: center;">${line.replace(/^#\s*/, '')}</h1>`);
+          } else if (line.startsWith('## ')) {
+            htmlParts.push(`<h2 style="color: #2b6cb0; font-size: 18pt; margin-top: 28px; margin-bottom: 14px;">${line.replace(/^##\s*/, '')}</h2>`);
+          } else if (line.startsWith('### ')) {
+            htmlParts.push(`<h3 style="color: #2c5282; font-size: 14pt; margin-top: 18px; margin-bottom: 10px;">${line.replace(/^###\s*/, '')}</h3>`);
+          } else {
+            htmlParts.push(`<p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">${line}</p>`);
+          }
+        }
+      } else {
+        // Standard publication body paragraph with generous spacing for readability
+        const pContent = block.replace(/\n/g, '<br/>');
+        htmlParts.push(`<p style="line-height: 2.2; font-size: 12.5pt; text-align: justify; margin-bottom: 24px;">${pContent}</p>`);
+      }
     }
   }
 

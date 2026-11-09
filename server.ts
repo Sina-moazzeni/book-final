@@ -62,6 +62,12 @@ function sanitizeTranslatedHtml(html: string): string {
     .replace(/<p[^>]*>\s*[\(\[\{]?\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]?\s*<\/p>/gi, '')
     // Strip accidental inline horizontal margins, paddings or text-indent that cause text overflow or right-edge clipping
     .replace(/(?:margin-right|margin-left|padding-right|padding-left|text-indent)\s*:\s*[^;"]+;?/gi, '')
+    // Strip chatbot conversational remarks and meta-fillers (e.g. "اگر متن اصلی ... را ارسال کنید...")
+    .replace(/(?:<p[^>]*>)?\s*(?:اگر|چنانچه|در\s+صورت\s+اینکه|در\s+صورتی\s+که|لطفاً|خواهشمند\s+است)\s+(?:متن\s+اصلی|متن\s+کتاب|پاراگراف‌ها|دیالوگ‌ها|ادامه\s+متن)[\s\S]*?(?:ارائه\s+می‌?کنم|ترجمه\s+خواهم\s+کرد|ارسال\s+فرمایید|ارسال\s+کنید|در\s+اختیار\s+قرار\s+دهید|خدمت\s+شما\s+ارائه\s+می‌?گردد)[.!?؟\s]*(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*اگر\s+متن\s+اصلی\s*\([^\)]*\)\s*را\s+ارسال\s+کنید[\s\S]*?(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*[^<]*رعایت\s+واژگان\s+تثبیت[\s\S]*?پیوند\s+ریتمیک[^<]*(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*(?:لطفاً|خواهشمند\s+است)\s+متن\s+اصلی\s+را\s+ارسال\s+کنید[.!?؟\s]*(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*(?:Please provide the text|If you provide the text|Waiting for the text)[\s\S]*?(?:<\/p>)?/gi, '')
     .trim();
 
   // Enhance footnotes or notes paragraphs with distinct publication styling
@@ -316,6 +322,24 @@ Translation Principles:
    - The translated Persian line for each cue must correspond 1-to-1 to that exact time segment without merging timestamps or drifting in time.
 
 8. Strict Paragraph Segmentation & Spacing (High Readability): Never dump translated sentences into a single continuous wall of text. Every distinct topic, logical transition, dialogue exchange, or author paragraph MUST be separated into its own individual <p> block with clear vertical spacing.
+
+9. Strict Table of Contents & Headings Separation (فهرست مطالب، سرتیترها و خطوط مجزا):
+   - When the source text contains a Table of Contents (Contents, Index), list of chapters, or lines of distinct section titles:
+     * NEVER merge multiple chapter titles, section names, or list items into a single paragraph or running sentence!
+     * The main header (e.g. "Contents" or "Table of Contents") MUST be formatted as:
+       <h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>
+     * EVERY chapter title, section title, or listed item MUST be placed on its own separate line wrapped in a distinct element:
+       <p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">[عنوان فصل]</p>
+       or <h2 style="color: #2b6cb0; font-size: 17pt; margin-top: 22px; margin-bottom: 10px;">[عنوان سرتیتر]</h2>
+     * If the source text ends a line or paragraph for each heading, you MUST preserve that 1-to-1 line separation in Persian.
+
+10. Absolute Ban on Conversational AI Fillers & Meta-Commentary (ممنوعیت مطلق پیام‌های چت‌بات و متن‌های مکالمه‌ای):
+   - Under NO circumstances are you allowed to output assistant messages, conversational filler, polite greetings, or conditions such as:
+     «اگر متن اصلی (پاراگراف‌ها یا دیالوگ‌های این بخش) را ارسال کنید، ترجمهٔ کامل و یکدست فارسی را با رعایت واژگان تثبیت‌شده و پیوند ریتمیک با بخش پیشین ارائه می‌کنم.»
+     «لطفاً متن اصلی را ارسال فرمایید...»
+     «در صورت ارسال متن...»
+     «این بخش حاوی متن نیست...»
+   - Translate whatever text is provided in [INPUT TEXT TO TRANSLATE] directly into HTML. If it is only a single title, translate only that title. If it is a Table of Contents, translate each entry. NEVER ask for more text or explain what you will do.
 
 Formatting & Structural Rules (HTML / Rich Styling):
 To allow seamless export to DOCX and PDF with color-coded typography:
@@ -883,6 +907,21 @@ app.post('/api/translate', async (req, res) => {
     glossaryText = glossary;
   }
 
+  // Detect if chunk is a Table of Contents or list of chapter headings/short lines
+  const rawLines = cleanEnglishText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const lowerEn = cleanEnglishText.toLowerCase();
+  const isTableOfContents =
+    lowerEn.includes('contents') ||
+    lowerEn.includes('table of contents') ||
+    lowerEn.includes('index') ||
+    lowerEn.includes('table des matières') ||
+    lowerEn.includes('inhaltsverzeichnis') ||
+    (rawLines.length >= 3 && rawLines.every(l => l.length < 80) && rawLines.length / (cleanEnglishText.split(/\s+/).length || 1) > 0.15);
+
+  const tocDirective = isTableOfContents
+    ? `\n[TABLE OF CONTENTS & HEADINGS DIRECTIVE]\nThis chunk consists of a Table of Contents (فهرست مطالب) or a list of chapter headings/short lines. Every single line MUST be placed on its own separate line wrapped in a distinct element: <p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">[عنوان فصل]</p>. Translate "Contents" or "Table of Contents" as <h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>. STRICTLY DO NOT merge these entries into a single paragraph or running sentence!\n`
+    : '';
+
   // Build the User Prompt with dedicated book cache and zero-summarization guarantee
   const userPrompt = `[CONFIGURATION]
 - Language Direction: ${sourceLangName} -> ${targetLangName} (Default & Core Reference: English to publication-grade Persian)
@@ -890,13 +929,15 @@ app.post('/api/translate', async (req, res) => {
 - Chapter / Section Context: ${cleanChapterTitle(chapterTitle || 'بخش جاری کتاب')}
 - Glossary / واژه‌نامه اختصاصی:
 ${glossaryText}
-${dedicatedCachePrompt ? `\n${dedicatedCachePrompt}` : (previousSummary ? `\n[PREVIOUS SUMMARY / CONTEXT]\n${previousSummary}\n` : '')}
+${dedicatedCachePrompt && !isTableOfContents ? `\n${dedicatedCachePrompt}` : (previousSummary && !isTableOfContents ? `\n[PREVIOUS SUMMARY / CONTEXT]\n${previousSummary}\n` : '')}
+${tocDirective}
 ${hasImages ? `\n[IMAGE PRESERVATION INSTRUCTION]\nThis text contains image placeholders like [[IMAGE_PRESERVED_SLOT_0]]. You MUST preserve every placeholder intact at its exact corresponding position between the translated paragraphs in Persian. Do NOT remove or modify image placeholders.\n` : ''}
 [CRITICAL INSTRUCTION]
 1. Do NOT summarize. Translate every single sentence, dialogue, nuance, and paragraph verbatim from ${sourceLangName} into fluent, natural ${targetLangName} without omission or censorship.
 2. Do NOT invent, add, or output artificial chunk numbers, section labels, or headers such as "بخش ۱", "بخش ۲", "(بخش ۱)", "Part 1", etc. Translate only the actual text content.
 3. Do NOT output raw website URLs or internet hyperlinks (e.g. https://... or www....). Book printing strictly prohibits raw URL clutter. If reference notes mention a website or online source, state only the source name without raw URLs.
-${dedicatedCachePrompt ? '4. Maintain 100% naming, stylistic, and rhythmic continuity with the dedicated book context cache provided above.' : ''}
+${dedicatedCachePrompt && !isTableOfContents ? '4. Maintain 100% naming, stylistic, and rhythmic continuity with the dedicated book context cache provided above.' : ''}
+5. ABSOLUTE BAN: Under NO circumstances are you allowed to output conversational text, questions, or conditional offers like «اگر متن اصلی را ارسال کنید...». Output ONLY the translated HTML content immediately.
 
 [INPUT TEXT TO TRANSLATE]
 ${cleanEnglishText}`;

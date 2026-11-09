@@ -26,12 +26,30 @@ Translation Principles:
    - Self-Help / Psychology: Clear, empowering, instructional, and modern Persian.
    - Academic / Technical / Mathematics / Aerospace: Precise, formal, and rigorously structured.
    - Economics / Business: Analytical, professional, and standard terminology.
-    - Candid & Direct (Secret Societies, Mysteries & Exposé): Completely direct, bold, fearless, and unfiltered Persian. Do NOT euphemize, censor, or dilute sensitive terms regarding secret societies, power cabals, esoteric rites, hidden agendas, and political mysteries. Translate with biting clarity, high impact, and investigative precision.
-    - Romance, Relationships & Erotic (عاشقانه، روابط عاطفی و اروتیک - کاملاً بدون سانسور و با نهایت وفاداری ادبی): Deeply passionate, intimate, sensual, emotional, direct, and completely unfiltered and explicit without prudish sanitization, moralizing, or puritanical censorship. Translate all romantic dialogues, sensual descriptions, emotional tensions, intimate physical encounters, relationship subtleties, bodily descriptions, and erotic scenes directly, boldly, and faithfully into vivid, natural, expressive, and publication-ready Persian. Never omit, soften, euphemize, or self-censor any word.
+   - Candid & Direct (Secret Societies, Mysteries & Exposé): Completely direct, bold, fearless, and unfiltered Persian. Do NOT euphemize, censor, or dilute sensitive terms regarding secret societies, power cabals, esoteric rites, hidden agendas, and political mysteries. Translate with biting clarity, high impact, and investigative precision.
+   - Romance, Relationships & Erotic (عاشقانه، روابط عاطفی و اروتیک - کاملاً بدون سانسور و با نهایت وفاداری ادبی): Deeply passionate, intimate, sensual, emotional, direct, and completely unfiltered and explicit without prudish sanitization, moralizing, or puritanical censorship. Translate all romantic dialogues, sensual descriptions, emotional tensions, intimate physical encounters, relationship subtleties, bodily descriptions, and erotic scenes directly, boldly, and faithfully into vivid, natural, expressive, and publication-ready Persian. Never omit, soften, euphemize, or self-censor any word.
 3. Custom Glossary Priority & Natural Text Integration: Strictly prioritize the provided custom glossary mapping over default translations. Never translate proprietary terms inconsistently. CRITICAL: In the translated Persian text, treat glossary words just like all other normal words in the sentence. Do NOT change their color, do NOT wrap them in <span style="color: #9b2c2c">, and do NOT highlight them with any special red color. They must blend seamlessly into the body text with regular styling and standard black/dark color.
 4. Strict No-Summarization Guarantee: Under NO circumstances are you allowed to summarize, condense, abbreviate, skip, or omit any paragraph, sentence, metaphor, example, or dialogue. Every single paragraph and thought must be translated in full completeness.
 5. Absolute Literary Fidelity & Zero Censorship (بدون هرگونه سانسور): This is an official literary and scholarly book translation platform. Translate every single scene, dialogue, word, and nuance faithfully, directly, and without any censorship, puritanical sanitization, moralizing, softening, or skipping. Romantic, erotic, sensual, intense, and adult literary content must be translated with 100% authenticity and exactness as written by the original author.
 6. Strict Chunk Cleanliness & Continuity (Zero Artificial Headers): Under NO circumstances are you allowed to output artificial chunk markers or part numbers such as «مقدمه و بخش نخست (بخش ۱)»، «بخش ۱»، «بخش ۲»، «(بخش ۱)», etc.
+7. Strict Table of Contents & Headings Separation (فهرست مطالب، سرتیترها و خطوط مجزا):
+   - When the source text contains a Table of Contents (Contents, Index), list of chapters, or lines of distinct section titles:
+     * NEVER merge multiple chapter titles, section names, or list items into a single paragraph or running sentence!
+     * The main header (e.g. "Contents" or "Table of Contents") MUST be formatted as:
+       <h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>
+     * EVERY chapter title, section title, or listed item MUST be placed on its own separate line wrapped in a distinct element:
+       <p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">[عنوان فصل]</p>
+       or <h2 style="color: #2b6cb0; font-size: 17pt; margin-top: 22px; margin-bottom: 10px;">[عنوان سرتیتر]</h2>
+     * If the source text ends a line or paragraph for each heading, you MUST preserve that 1-to-1 line separation in Persian.
+8. Strict Paragraph Segmentation & Line Breaks:
+   - When an English paragraph ends or when a line breaks, the Persian translation MUST also end that paragraph and start a new <p>. Never join different paragraphs into one giant wall of text.
+9. Absolute Ban on Conversational AI Fillers & Meta-Commentary (ممنوعیت مطلق پیام‌های چت‌بات و متن‌های مکالمه‌ای):
+   - Under NO circumstances are you allowed to output assistant messages, conversational filler, polite greetings, or conditions such as:
+     «اگر متن اصلی (پاراگراف‌ها یا دیالوگ‌های این بخش) را ارسال کنید، ترجمهٔ کامل و یکدست فارسی را با رعایت واژگان تثبیت‌شده و پیوند ریتمیک با بخش پیشین ارائه می‌کنم.»
+     «لطفاً متن اصلی را ارسال فرمایید...»
+     «در صورت ارسال متن...»
+     «این بخش حاوی متن نیست...»
+   - Translate whatever text is provided in [INPUT TEXT TO TRANSLATE] directly into HTML. If it is only a single title, translate only that title. If it is a Table of Contents, translate each entry. NEVER ask for more text or explain what you will do.
 
 Formatting & Structural Rules (HTML / Rich Styling):
 - Enclose the output in clean, semantic HTML format:
@@ -99,6 +117,12 @@ function sanitizeTranslatedHtml(html: string): string {
     .replace(/<h[1-3][^>]*>\s*مقدمه و بخش نخست\s*(?:\([^\)]*\))?\s*<\/h[1-3]>/gi, '')
     .replace(/<h[1-3][^>]*>[^<]*[\(\[\{]\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}][^<]*<\/h[1-3]>/gi, '')
     .replace(/<p[^>]*>\s*[\(\[\{]?\s*بخش\s*[0-9۰-۹IVXLCDMivxlcdm]+\s*[\)\]\}]?\s*<\/p>/gi, '')
+    // Strip chatbot conversational remarks and meta-fillers (e.g. "اگر متن اصلی ... را ارسال کنید...")
+    .replace(/(?:<p[^>]*>)?\s*(?:اگر|چنانچه|در\s+صورت\s+اینکه|در\s+صورتی\s+که|لطفاً|خواهشمند\s+است)\s+(?:متن\s+اصلی|متن\s+کتاب|پاراگراف‌ها|دیالوگ‌ها|ادامه\s+متن)[\s\S]*?(?:ارائه\s+می‌?کنم|ترجمه\s+خواهم\s+کرد|ارسال\s+فرمایید|ارسال\s+کنید|در\s+اختیار\s+قرار\s+دهید|خدمت\s+شما\s+ارائه\s+می‌?گردد)[.!?؟\s]*(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*اگر\s+متن\s+اصلی\s*\([^\)]*\)\s*را\s+ارسال\s+کنید[\s\S]*?(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*[^<]*رعایت\s+واژگان\s+تثبیت[\s\S]*?پیوند\s+ریتمیک[^<]*(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*(?:لطفاً|خواهشمند\s+است)\s+متن\s+اصلی\s+را\s+ارسال\s+کنید[.!?؟\s]*(?:<\/p>)?/gi, '')
+    .replace(/(?:<p[^>]*>)?\s*(?:Please provide the text|If you provide the text|Waiting for the text)[\s\S]*?(?:<\/p>)?/gi, '')
     .trim();
 
   // Enhance footnotes or notes paragraphs
@@ -996,18 +1020,35 @@ export class QueueManager {
     const sourceLangName = book.sourceLanguage === 'de' ? 'German' : book.sourceLanguage === 'fr' ? 'French' : book.sourceLanguage === 'ar' ? 'Arabic' : book.sourceLanguage === 'tr' ? 'Turkish' : book.sourceLanguage === 'es' ? 'Spanish' : book.sourceLanguage === 'ru' ? 'Russian' : 'English';
     const targetLangName = book.targetLanguage === 'en' ? 'English' : book.targetLanguage === 'ar' ? 'Arabic' : book.targetLanguage === 'tr' ? 'Turkish' : book.targetLanguage === 'fr' ? 'French' : book.targetLanguage === 'de' ? 'German' : 'Persian (Farsi)';
 
+    // Detect if chunk is a Table of Contents or list of chapter headings/short lines
+    const rawLines = cleanEnglish.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const lowerEn = cleanEnglish.toLowerCase();
+    const isTableOfContents =
+      lowerEn.includes('contents') ||
+      lowerEn.includes('table of contents') ||
+      lowerEn.includes('index') ||
+      lowerEn.includes('table des matières') ||
+      lowerEn.includes('inhaltsverzeichnis') ||
+      (rawLines.length >= 3 && rawLines.every(l => l.length < 80) && rawLines.length / (cleanEnglish.split(/\s+/).length || 1) > 0.15);
+
+    const tocDirective = isTableOfContents
+      ? `\n[TABLE OF CONTENTS & HEADINGS DIRECTIVE]\nThis chunk consists of a Table of Contents (فهرست مطالب) or a list of chapter headings/short lines. Every single line MUST be placed on its own separate line wrapped in a distinct element: <p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">[عنوان فصل]</p>. Translate "Contents" or "Table of Contents" as <h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>. STRICTLY DO NOT merge these entries into a single paragraph or running sentence!\n`
+      : '';
+
     const userPrompt = `[CONFIGURATION]
 - Language Direction: ${sourceLangName} -> ${targetLangName}
 - Book Tone: ${tone}
 - Chapter Context: ${cleanChapterTitle(book.title)}
 - Glossary:
 ${glossaryText}
-${dedicatedCachePrompt ? `\n${dedicatedCachePrompt}` : ''}
+${dedicatedCachePrompt && !isTableOfContents ? `\n${dedicatedCachePrompt}` : ''}
+${tocDirective}
 [CRITICAL INSTRUCTION]
-1. Translate every paragraph and dialogue in full from ${sourceLangName} into fluent, natural, and publication-ready ${targetLangName} without omission, censorship, or summary.
+1. Translate every paragraph, heading, and dialogue in full from ${sourceLangName} into fluent, natural, and publication-ready ${targetLangName} without omission, censorship, or summary.
 2. Do NOT invent or output artificial chunk numbers or section labels such as "بخش ۱", "بخش ۲", "(بخش ۱)", "Part 1", etc.
 3. Do NOT output raw website URLs or internet hyperlinks (e.g. https://... or www....). Book printing strictly prohibits raw URL clutter.
-${dedicatedCachePrompt ? '4. Maintain 100% naming, stylistic, and rhythmic continuity with the dedicated book context cache provided above.' : ''}
+${dedicatedCachePrompt && !isTableOfContents ? '4. Maintain 100% naming, stylistic, and rhythmic continuity with the dedicated book context cache provided above.' : ''}
+5. ABSOLUTE BAN: Under NO circumstances are you allowed to output conversational text, questions, or conditional offers like «اگر متن اصلی را ارسال کنید...». Output ONLY the translated HTML content immediately.
 
 [INPUT TEXT TO TRANSLATE]
 ${cleanEnglish}`;
