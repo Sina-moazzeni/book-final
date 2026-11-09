@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Play,
   Pause,
@@ -118,6 +118,12 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
   const [copiedEn, setCopiedEn] = useState(false);
   const [copiedFa, setCopiedFa] = useState(false);
   const [fullBookMode, setFullBookMode] = useState(false);
+
+  // Lazy memoized full-book chapters: NEVER computed unless fullBookMode is toggled on!
+  const fullBookChapters = useMemo(() => {
+    if (!fullBookMode) return [];
+    return groupChunksIntoChapters(project?.chunks || []);
+  }, [fullBookMode, project?.chunks]);
 
   // Reading Comfort Suite (Sepia, Slate, Midnight, Paper + Font Size & Line Height)
   const [readerTheme, setReaderTheme] = useState<'paper' | 'sepia' | 'slate' | 'midnight'>('paper');
@@ -663,7 +669,7 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
               </div>
 
               <div className="space-y-10 sm:space-y-12">
-                {groupChunksIntoChapters(project?.chunks || []).map((ch) => (
+                {fullBookChapters.map((ch) => (
                   <div key={ch.chapterKey} className="book-chapter-block border-b pb-8 sm:pb-10 last:border-b-0" style={{ borderColor: customColors.borderColor ? `${customColors.borderColor}40` : '#f1f5f9' }}>
                     <div className="text-center mb-5 sm:mb-6">
                       <h2

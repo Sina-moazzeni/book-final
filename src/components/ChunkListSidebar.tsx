@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ListFilter,
   CheckCircle2,
@@ -48,23 +48,38 @@ export const ChunkListSidebar: React.FC<ChunkListSidebarProps> = ({
   const [search, setSearch] = useState('');
 
   const safeChunks = chunks || [];
-  const failedCount = safeChunks.filter(c => c && (c.status === 'error' || (!c.translatedHtml && !!c.errorMessage))).length;
-  const incompleteCount = safeChunks.filter(c => !c || !c.translatedHtml || typeof c.translatedHtml !== 'string' || c.translatedHtml.trim().length === 0).length;
-
-  const filteredChunks = safeChunks.filter(c => {
-    if (!c) return false;
-    const hasHtml = Boolean(c.translatedHtml && typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length > 0);
-    if (filter === 'completed' && !hasHtml) return false;
-    if (filter === 'pending' && hasHtml) return false;
-    if (filter === 'failed' && c.status !== 'error' && (!c.errorMessage || hasHtml)) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      const matchTitle = (c.chapterTitle ? String(c.chapterTitle) : '').toLowerCase().includes(q);
-      const matchText = (c.englishText ? String(c.englishText) : '').toLowerCase().includes(q);
-      if (!matchTitle && !matchText) return false;
+  const { failedCount, incompleteCount } = useMemo(() => {
+    let failed = 0;
+    let incomplete = 0;
+    for (const c of safeChunks) {
+      if (!c) continue;
+      const hasHtml = Boolean(c.translatedHtml && typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length > 0);
+      if (!hasHtml) {
+        incomplete++;
+        if (c.status === 'error' || c.errorMessage) failed++;
+      } else if (c.status === 'error') {
+        failed++;
+      }
     }
-    return true;
-  });
+    return { failedCount: failed, incompleteCount: incomplete };
+  }, [safeChunks]);
+
+  const filteredChunks = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return safeChunks.filter(c => {
+      if (!c) return false;
+      const hasHtml = Boolean(c.translatedHtml && typeof c.translatedHtml === 'string' && c.translatedHtml.trim().length > 0);
+      if (filter === 'completed' && !hasHtml) return false;
+      if (filter === 'pending' && hasHtml) return false;
+      if (filter === 'failed' && c.status !== 'error' && (!c.errorMessage || hasHtml)) return false;
+      if (q) {
+        const matchTitle = (c.chapterTitle ? String(c.chapterTitle) : '').toLowerCase().includes(q);
+        const matchText = (c.englishText ? String(c.englishText) : '').toLowerCase().includes(q);
+        if (!matchTitle && !matchText) return false;
+      }
+      return true;
+    });
+  }, [safeChunks, filter, search]);
 
   return (
     <aside className="no-print w-full md:w-80 lg:w-96 bg-slate-900 border-l border-slate-800 flex flex-col h-full md:h-[calc(100vh-8rem)] overflow-hidden">
