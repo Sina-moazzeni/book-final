@@ -14,7 +14,7 @@ export function chunkBookText(rawText: string, options: ChunkOptions = {}): Book
   const cleanText = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   // Chapter detection pattern for English and Persian book conventions
-  const headingRegex = /^(?:#{1,3}\s+|(?:CHAPTER|Chapter|PART|Part|BOOK|Book|SECTION|Section|ACT|Act)\s+(?:[0-9]+|[IVXLCDM]+|[A-Za-z]+)|(?:Introduction|Prologue|Preface|Foreword|Epilogue|Conclusion|Afterword)|(?:فصل|بخش|گفتار|دیباچه|پیش‌گفتار|مقدمه)\s*(?:[۰-۹0-9]+|[A-Za-z]+)?)/i;
+  const headingRegex = /^(?:#{1,3}\s+|(?:CHAPTER|Chapter|PART|Part|BOOK|Book|SECTION|Section|ACT|Act)\s+(?:[0-9]+|[IVXLCDM]+|[A-Za-z]+)|(?:Contents|Table of Contents|Index|Introduction|Prologue|Preface|Foreword|Epilogue|Conclusion|Afterword)|(?:فصل|بخش|گفتار|دیباچه|پیش‌گفتار|مقدمه|فهرست مطالب|فهرست)\s*(?:[۰-۹0-9]+|[A-Za-z]+)?)/i;
 
   // Split into raw chapter blocks if multiple chapters found
   const rawChapters: { title: string; body: string }[] = [];

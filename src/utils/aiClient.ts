@@ -131,6 +131,27 @@ Translation Principles:
 5. Absolute Literary Fidelity & Zero Censorship (بدون هرگونه سانسور): This is an official literary and scholarly book translation platform. Translate every single scene, dialogue, word, and nuance faithfully, directly, and without any censorship, puritanical sanitization, moralizing, softening, or skipping. Romantic, erotic, sensual, intense, and adult literary content must be translated with 100% authenticity and exactness as written by the original author.
 6. Strict Chunk Cleanliness & Continuity (Zero Artificial Headers): Under NO circumstances are you allowed to output artificial chunk markers, part numbers, or invented headings such as «مقدمه و بخش نخست (بخش ۱)»، «بخش ۱»، «بخش ۲»، «(بخش ۱)»، "Part 1", "[Part 1]", etc., into the translation. Do NOT invent or inject a chapter heading unless the original English input text explicitly starts with an author's original title/heading. The chunks must flow together as seamless, continuous prose without artificial breaks.
 
+7. Strict Table of Contents & Headings Separation (فهرست مطالب، سرتیترها و خطوط مجزا):
+   - When the source text contains a Table of Contents (Contents, Index), list of chapters, or lines of distinct section titles:
+     * NEVER merge multiple chapter titles, section names, or list items into a single paragraph or running sentence!
+     * The main header (e.g. "Contents" or "Table of Contents") MUST be formatted as:
+       <h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>
+     * EVERY chapter title, section title, or listed item MUST be placed on its own separate line wrapped in a distinct element:
+       <p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">[عنوان فصل]</p>
+       or <h2 style="color: #2b6cb0; font-size: 17pt; margin-top: 22px; margin-bottom: 10px;">[عنوان سرتیتر]</h2>
+     * If the source text ends a line or paragraph for each heading, you MUST preserve that 1-to-1 line separation in Persian.
+
+8. Strict Paragraph Segmentation & Line Breaks:
+   - When an English paragraph ends or when a line breaks, the Persian translation MUST also end that paragraph and start a new <p>. Never join different paragraphs into one giant wall of text.
+
+9. Absolute Ban on Conversational AI Fillers & Meta-Commentary (ممنوعیت مطلق پیام‌های چت‌بات و متن‌های مکالمه‌ای):
+   - Under NO circumstances are you allowed to output assistant messages, conversational filler, polite greetings, or conditions such as:
+     «اگر متن اصلی (پاراگراف‌ها یا دیالوگ‌های این بخش) را ارسال کنید، ترجمهٔ کامل و یکدست فارسی را با رعایت واژگان تثبیت‌شده و پیوند ریتمیک با بخش پیشین ارائه می‌کنم.»
+     «لطفاً متن اصلی را ارسال فرمایید...»
+     «در صورت ارسال متن...»
+     «این بخش حاوی متن نیست...»
+   - Translate whatever text is provided in [INPUT TEXT TO TRANSLATE] directly into HTML. If it is only a single title, translate only that title. If it is a Table of Contents, translate each entry. NEVER ask for more text or explain what you will do.
+
 Formatting & Structural Rules (HTML / Rich Styling):
 To allow seamless export to DOCX and PDF with color-coded typography:
 - Enclose the output in clean, semantic HTML format:
@@ -469,15 +490,32 @@ export async function translateDirectFromClient({
     glossaryText = glossary.map(g => `  * ${g.en} -> ${g.fa}`).join('\n');
   }
 
+  // Detect if chunk is a Table of Contents or list of chapter headings/short lines
+  const rawLines = cleanEnglishText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const lowerEn = cleanEnglishText.toLowerCase();
+  const isTableOfContents =
+    lowerEn.includes('contents') ||
+    lowerEn.includes('table of contents') ||
+    lowerEn.includes('index') ||
+    lowerEn.includes('table des matières') ||
+    lowerEn.includes('inhaltsverzeichnis') ||
+    (rawLines.length >= 3 && rawLines.every(l => l.length < 80) && rawLines.length / (cleanEnglishText.split(/\s+/).length || 1) > 0.15);
+
+  const tocDirective = isTableOfContents
+    ? `\n[TABLE OF CONTENTS & HEADINGS DIRECTIVE]\nThis chunk consists of a Table of Contents (فهرست مطالب) or a list of chapter headings/short lines. Every single line MUST be placed on its own separate line wrapped in a distinct element: <p style="line-height: 2.2; font-size: 13pt; margin-bottom: 12px; border-bottom: 1px dotted #cbd5e1; padding-bottom: 6px; text-align: right;">[عنوان فصل]</p>. Translate "Contents" or "Table of Contents" as <h1 style="color: #1a365d; font-size: 24pt; margin-bottom: 24px; text-align: center; font-weight: 800;">فهرست مطالب</h1>. STRICTLY DO NOT merge these entries into a single paragraph or running sentence!\n`
+    : '';
+
   const userPrompt = `[CONFIGURATION]
 - Book Tone: ${tone || 'معنوی و خودشناسی'}
 - Chapter / Section Context: ${cleanChapterTitle(chapterTitle || 'بخش جاری کتاب')}
 - Glossary / واژه‌نامه اختصاصی:
 ${glossaryText}
+${tocDirective}
 ${hasImages ? `\n[IMAGE PRESERVATION INSTRUCTION]\nThis text contains image placeholders like [[IMAGE_PRESERVED_SLOT_0]]. You MUST preserve every placeholder intact at its exact corresponding position between the translated paragraphs in Persian. Do NOT remove or modify image placeholders.\n` : ''}
 [CRITICAL INSTRUCTION]
 1. Do NOT summarize. Translate every single sentence, dialogue, nuance, and paragraph verbatim into fluent, natural Persian without omission or censorship.
 2. Do NOT invent, add, or output artificial chunk numbers, section labels, or headers such as "بخش ۱", "بخش ۲", "(بخش ۱)", "Part 1", etc. Translate only the actual text content.
+3. ABSOLUTE BAN: Under NO circumstances are you allowed to output conversational text, questions, or conditional offers like «اگر متن اصلی را ارسال کنید...». Output ONLY the translated HTML content immediately.
 
 [INPUT TEXT TO TRANSLATE]
 ${cleanEnglishText}`;
