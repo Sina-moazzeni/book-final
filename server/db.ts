@@ -97,6 +97,7 @@ export interface BookRecord {
   totalChunks?: number;
   completedChunks?: number;
   progressPercent?: number;
+  designConfig?: any;
 }
 
 export interface TranslationJob {
@@ -1573,73 +1574,130 @@ class Database {
   private lastSnapshotTime: number = 0;
 
   /**
-   * Scans data/books/*.json to recover any books that exist on disk but are missing from schema.books
+   * Scans data/books/*.json, data/database.backup.json, and data/backups/
+   * to automatically recover any books that exist on disk or in snapshots but are missing from schema.books
    * (e.g. after git pull, server migration, or database.json reset).
    */
   public scanAndRecoverOrphanedBooks(targetSchema?: DatabaseSchema): number {
     const s = targetSchema || this.data;
-    if (!fs.existsSync(BOOKS_DIR)) return 0;
     let recoveredCount = 0;
+    const existingBookIds = new Set((s.books || []).map((b) => b.id));
+    const primaryAdmin = (s.users || []).find(u => u.role === 'admin') || (s.users || [])[0];
+    const defaultUserId = primaryAdmin ? primaryAdmin.id : 'usr_admin_1';
 
-    try {
-      const files = fs.readdirSync(BOOKS_DIR);
-      const existingBookIds = new Set(s.books.map((b) => b.id));
+    // 1. Scan data/books/*.json
+    if (fs.existsSync(BOOKS_DIR)) {
+      try {
+        const files = fs.readdirSync(BOOKS_DIR);
+        for (const file of files) {
+          if (!file.endsWith('.json')) continue;
+          const bookId = file.replace('.json', '');
+          if (existingBookIds.has(bookId)) continue;
 
-      for (const file of files) {
-        if (!file.endsWith('.json')) continue;
-        const bookId = file.replace('.json', '');
-        if (existingBookIds.has(bookId)) continue;
+          try {
+            const filePath = path.resolve(BOOKS_DIR, file);
+            const raw = fs.readFileSync(filePath, 'utf-8');
+            const bookData = JSON.parse(raw);
+            const chunks = Array.isArray(bookData.chunks) ? bookData.chunks : [];
+            if (chunks.length === 0 && !bookData.adminCopy && !bookData.title) continue;
 
-        try {
-          const filePath = path.resolve(BOOKS_DIR, file);
-          const raw = fs.readFileSync(filePath, 'utf-8');
-          const bookData = JSON.parse(raw);
-          const chunks = Array.isArray(bookData.chunks) ? bookData.chunks : [];
-          if (chunks.length === 0 && !bookData.adminCopy) continue;
+            const totalChunks = chunks.length || bookData.totalChunks || 0;
+            const completedChunks = chunks.length > 0
+              ? chunks.filter((c: any) => c.status === 'completed' || Boolean(c.translatedHtml)).length
+              : (bookData.completedChunks || 0);
+            const totalWords = chunks.reduce((acc: number, c: any) => acc + (c.wordCount || 0), 0) || bookData.wordCount || 1000;
+            const totalImages = chunks.reduce((acc: number, c: any) => acc + (c.imageCount || (c.hasImages ? 1 : 0)), 0) || bookData.totalImagesCount || 0;
 
-          const totalChunks = chunks.length;
-          const completedChunks = chunks.filter((c: any) => c.status === 'completed' || Boolean(c.translatedHtml)).length;
-          const totalWords = chunks.reduce((acc: number, c: any) => acc + (c.wordCount || 0), 0);
-          const totalImages = chunks.reduce((acc: number, c: any) => acc + (c.imageCount || (c.hasImages ? 1 : 0)), 0);
+            let inferredTitle = bookData.title || bookData.adminCopy?.title || chunks[0]?.chapterTitle || `کتاب ${bookId.slice(-6)}`;
+            if (inferredTitle.length > 90) inferredTitle = inferredTitle.slice(0, 90) + '...';
 
-          // Infer title from first chapter, adminCopy, or bookId
-          let inferredTitle = bookData.adminCopy?.title || chunks[0]?.chapterTitle || `کتاب ${bookId.slice(-6)}`;
-          if (inferredTitle.length > 80) inferredTitle = inferredTitle.slice(0, 80) + '...';
+            const recoveredBook: BookRecord = {
+              id: bookId,
+              userId: bookData.userId || defaultUserId,
+              title: inferredTitle,
+              originalTitle: bookData.originalTitle || inferredTitle,
+              author: bookData.author || 'نامشخص',
+              translator: bookData.translator || 'سامانه ترجمه',
+              tone: bookData.tone || 'spiritual',
+              wordCount: totalWords,
+              estimatedCost: bookData.estimatedCost || totalWords * 45,
+              status: completedChunks === totalChunks && totalChunks > 0 ? 'completed' : 'translating',
+              chunks: [],
+              totalChunks,
+              completedChunks,
+              totalImagesCount: totalImages,
+              progressPercent: totalChunks > 0 ? Math.round((completedChunks / totalChunks) * 100) : 0,
+              designConfig: bookData.designConfig,
+              createdAt: bookData.createdAt || (Date.now() - 86400000),
+              updatedAt: bookData.updatedAt || Date.now(),
+            };
 
-          const recoveredBook: BookRecord = {
-            id: bookId,
-            userId: 'usr_admin_default',
-            title: inferredTitle,
-            originalTitle: inferredTitle,
-            author: 'نامشخص',
-            translator: 'سامانه ترجمه',
-            tone: 'spiritual',
-            wordCount: totalWords || 1000,
-            estimatedCost: (totalWords || 1000) * 45,
-            status: completedChunks === totalChunks && totalChunks > 0 ? 'completed' : 'translating',
-            chunks: [],
-            totalChunks,
-            completedChunks,
-            totalImagesCount: totalImages,
-            progressPercent: totalChunks > 0 ? Math.round((completedChunks / totalChunks) * 100) : 0,
-            createdAt: Date.now() - 86400000,
-            updatedAt: Date.now(),
-          };
-
-          s.books.push(recoveredBook);
-          existingBookIds.add(bookId);
-          recoveredCount++;
-          console.log(`[DB] Successfully recovered book from disk: ${bookId} ("${inferredTitle}")`);
-        } catch (readErr) {
-          console.warn(`[DB] Error parsing book file ${file}:`, readErr);
+            s.books.push(recoveredBook);
+            existingBookIds.add(bookId);
+            recoveredCount++;
+            console.log(`[DB] Successfully recovered book from disk: ${bookId} ("${inferredTitle}")`);
+          } catch (readErr) {
+            console.warn(`[DB] Error parsing book file ${file}:`, readErr);
+          }
         }
+      } catch (dirErr) {
+        console.error('[DB] Error scanning books directory:', dirErr);
       }
+    }
 
-      if (recoveredCount > 0 && !targetSchema) {
-        this.saveData(this.data);
+    // 2. Scan data/database.backup.json for any missing books
+    if (fs.existsSync(DB_BACKUP_FILE)) {
+      try {
+        const rawBackup = fs.readFileSync(DB_BACKUP_FILE, 'utf-8');
+        const parsedBackup = JSON.parse(rawBackup);
+        const backupBooks = Array.isArray(parsedBackup?.books) ? parsedBackup.books : [];
+        for (const b of backupBooks) {
+          if (b && b.id && !existingBookIds.has(b.id)) {
+            s.books.push({
+              ...b,
+              userId: b.userId || defaultUserId,
+            });
+            existingBookIds.add(b.id);
+            recoveredCount++;
+            console.log(`[DB] Recovered book from database.backup.json: ${b.id} ("${b.title}")`);
+          }
+        }
+      } catch (e) {
+        console.warn('[DB] Could not parse DB_BACKUP_FILE during recovery scan:', e);
       }
-    } catch (dirErr) {
-      console.error('[DB] Error scanning books directory:', dirErr);
+    }
+
+    // 3. Scan hourly snapshots in data/backups/
+    if (fs.existsSync(BACKUPS_DIR)) {
+      try {
+        const snaps = fs.readdirSync(BACKUPS_DIR).filter(f => f.startsWith('backup_') && f.endsWith('.json')).sort().reverse();
+        for (const snap of snaps.slice(0, 10)) {
+          try {
+            const rawSnap = fs.readFileSync(path.resolve(BACKUPS_DIR, snap), 'utf-8');
+            const parsedSnap = JSON.parse(rawSnap);
+            const snapBooks = Array.isArray(parsedSnap?.books) ? parsedSnap.books : (Array.isArray(parsedSnap?.data?.books) ? parsedSnap.data.books : []);
+            for (const b of snapBooks) {
+              if (b && b.id && !existingBookIds.has(b.id)) {
+                s.books.push({
+                  ...b,
+                  userId: b.userId || defaultUserId,
+                });
+                existingBookIds.add(b.id);
+                recoveredCount++;
+                console.log(`[DB] Recovered book from snapshot ${snap}: ${b.id} ("${b.title}")`);
+              }
+            }
+          } catch (snapErr) {
+            // continue checking other snapshots
+          }
+        }
+      } catch (e) {
+        console.warn('[DB] Could not scan snapshots directory during recovery scan:', e);
+      }
+    }
+
+    if (recoveredCount > 0 && !targetSchema) {
+      this.saveData(this.data);
     }
 
     return recoveredCount;

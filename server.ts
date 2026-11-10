@@ -2759,6 +2759,19 @@ app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `مسیر API یافت نشد: ${req.method} ${req.path}` });
 });
 
+// Global JSON error handler for all /api/* endpoints (prevents returning HTML stack traces)
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.path.startsWith('/api/') || req.originalUrl.startsWith('/api/')) {
+    console.error('[API Server Error]:', err);
+    if (!res.headersSent) {
+      return res.status(err.status || 500).json({
+        error: err?.message || 'خطای داخلی سرور در پردازش درخواست',
+      });
+    }
+  }
+  next(err);
+});
+
 // Setup Vite or static serving
 async function startServer() {
   if (!isProduction) {

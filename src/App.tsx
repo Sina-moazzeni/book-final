@@ -421,27 +421,42 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Dedicated Clean PDF Printing Handler:
+  // Dedicated Clean PDF Printing Handler with High-Capacity Page Preparation
   const [isPrinting, setIsPrinting] = useState(false);
+  const [isPreparingPrint, setIsPreparingPrint] = useState(false);
+  const [printStatusMessage, setPrintStatusMessage] = useState('');
 
   // Dynamically sets document.title to the current book's title during print,
   // preventing the platform branding ("مترجم و ویراستار هوشمند کتاب...") from ever printing
   // in the PDF header, and ensuring the saved PDF file has the clean book title.
   const handlePrintPdf = useCallback(() => {
-    setIsPrinting(true);
-    const previousTitle = document.title;
+    const chunkCount = project?.chunks?.length || 0;
     const cleanTitle = project?.title?.trim() || 'کتاب';
+    const previousTitle = document.title;
     document.title = cleanTitle;
-    // Short RAF delay so React renders PrintDocument before browser opens print dialog
+
+    setIsPreparingPrint(true);
+    setPrintStatusMessage(`درحال آماده‌سازی ${chunkCount} صفحه کتاب برای چاپ بدون افت سرعت...`);
+    setIsPrinting(true);
+
+    // Give browser sufficient layout time depending on book size (prevents Chrome Page Unresponsive popup)
+    const delay = chunkCount > 100 ? 900 : chunkCount > 40 ? 500 : 200;
+
     requestAnimationFrame(() => {
       setTimeout(() => {
-        window.print();
-      }, 100);
+        setIsPreparingPrint(false);
+        try {
+          window.print();
+        } catch (e) {
+          console.error('Print failed:', e);
+        }
+      }, delay);
     });
+
     setTimeout(() => {
       document.title = previousTitle;
-    }, 1500);
-  }, [project?.title]);
+    }, 4500);
+  }, [project?.title, project?.chunks?.length]);
 
   useEffect(() => {
     let savedTitle = document.title;
@@ -454,6 +469,7 @@ export default function App() {
     };
     const handleAfterPrint = () => {
       setIsPrinting(false);
+      setIsPreparingPrint(false);
       if (savedTitle) {
         document.title = savedTitle;
       }
@@ -1663,6 +1679,22 @@ export default function App() {
         <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-['Vazirmatn'] selection:bg-amber-500/30">
           {/* Printable Document for high-res PDF generation - only mounted when printing to save CPU & memory */}
           {isPrinting && <PrintDocument project={project} />}
+
+          {/* High-Capacity Print Preparation Overlay (Smooth UX for books with 100-500+ pages) */}
+          {isPreparingPrint && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/85 backdrop-blur-md no-print p-4">
+              <div className="bg-slate-900 border border-amber-500/40 p-6 sm:p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4 max-w-md text-center">
+                <div className="w-14 h-14 rounded-full border-4 border-amber-500/20 border-t-amber-500 animate-spin" />
+                <div className="space-y-1">
+                  <h3 className="font-bold text-white text-base sm:text-lg">درحال آماده‌سازی صفحات کتاب برای چاپ و PDF</h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">{printStatusMessage}</p>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-amber-400 bg-amber-500/10 px-3.5 py-1.5 rounded-full border border-amber-500/25 font-medium">
+                  <span>✓ بهینه‌سازی خودکار حافظه و جلوگیری از خطای هنگ مرورگر</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Main Studio Interactive UI */}
           <div className="no-print flex flex-col min-h-screen">

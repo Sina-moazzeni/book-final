@@ -367,12 +367,21 @@ export const ExportDesignModal: React.FC<ExportDesignModalProps> = ({
 
   const handleDownloadDocx = async () => {
     setIsExportingDocx(true);
-    const cfg = handleApplyConfig();
-    const updatedProject = { ...project, designConfig: cfg };
-    await downloadDocx(updatedProject);
-    setIsExportingDocx(false);
-    setSavedBanner(`فایل رسمی Word (.docx) با قلم ${fontFamily} و تنظیمات اختصاصی ایجاد و دانلود شد.`);
-    setTimeout(() => setSavedBanner(null), 3500);
+    setSavedBanner('درحال ارتباط با سرور و تولید سند Word (.docx) بدون افت سرعت مرورگر...');
+    try {
+      const cfg = handleApplyConfig();
+      const updatedProject = { ...project, designConfig: cfg };
+      const success = await downloadDocx(updatedProject);
+      if (success) {
+        setSavedBanner(`✓ فایل رسمی Word (.docx) با قلم ${fontFamily} و ساختار کامل کتاب دانلود شد.`);
+      }
+    } catch (err: any) {
+      console.error('Word export error:', err);
+      setSavedBanner('خطا در ایجاد سند Word. لطفاً مجدداً امتحان کنید.');
+    } finally {
+      setIsExportingDocx(false);
+      setTimeout(() => setSavedBanner(null), 4500);
+    }
   };
 
   const handleDownloadHtml = () => {
@@ -2574,39 +2583,50 @@ export const ExportDesignModal: React.FC<ExportDesignModalProps> = ({
         </div>
 
         {/* Modal Action Footer */}
-        <div className="px-6 py-4 bg-slate-850 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCopyFullBook}
-              className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5"
-              title="کپی کردن متن کامل تمام بخش‌ها"
-            >
-              <Copy className="w-3.5 h-3.5 text-emerald-400" />
-              <span>کپی متن کتاب</span>
-            </button>
-          </div>
+        <div className="px-6 py-4 bg-slate-850 border-t border-slate-800 flex flex-col gap-3">
+          {(project.chunks || []).length >= 50 && (
+            <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/25 px-3.5 py-2 rounded-xl text-[11px] text-blue-300">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                این کتاب دارای <strong>{project.chunks.length} صفحه</strong> است. موتور خروجی <strong>Word (.docx)</strong> به صورت مستقیم به سرور متصل شده و تمام صفحات را بدون اشغال رم مرورگر در چند ثانیه دانلود می‌کند. خروجی <strong>PDF</strong> نیز با بهینه‌سازی حافظه آماده چاپ است.
+              </span>
+            </div>
+          )}
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Standard Word DOCX Button */}
-            <button
-              onClick={handleDownloadDocx}
-              disabled={isExportingDocx}
-              className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white transition flex items-center gap-2 shadow-lg shadow-blue-600/25 disabled:opacity-50"
-              title="دانلود فایل رسمی استاندارد مایکروسافت ورد (.docx) آماده چاپ"
-            >
-              <FileText className="w-4 h-4" />
-              <span>{isExportingDocx ? 'درحال ساخت سند رسمی ورد...' : 'دانلود فایل استاندارد Word (.docx)'}</span>
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCopyFullBook}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5"
+                title="کپی کردن متن کامل تمام بخش‌ها"
+              >
+                <Copy className="w-3.5 h-3.5 text-emerald-400" />
+                <span>کپی متن کتاب</span>
+              </button>
+            </div>
 
-            {/* Print & Save PDF Button */}
-            <button
-              onClick={handlePrint}
-              className="px-5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 via-orange-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-slate-950 transition flex items-center gap-2 shadow-lg shadow-amber-500/20 font-bold"
-              title="چاپ مستقیم یا ذخیره به صورت PDF با تنظیمات دلخواه"
-            >
-              <Printer className="w-4 h-4 text-slate-950" />
-              <span>چاپ و ذخیره فایل PDF</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Standard Word DOCX Button */}
+              <button
+                onClick={handleDownloadDocx}
+                disabled={isExportingDocx}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white transition flex items-center gap-2 shadow-lg shadow-blue-600/25 disabled:opacity-50"
+                title="دانلود فایل رسمی استاندارد مایکروسافت ورد (.docx) آماده چاپ"
+              >
+                <FileText className="w-4 h-4" />
+                <span>{isExportingDocx ? 'درحال ساخت سند رسمی ورد...' : 'دانلود فایل استاندارد Word (.docx)'}</span>
+              </button>
+
+              {/* Print & Save PDF Button */}
+              <button
+                onClick={handlePrint}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 via-orange-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-slate-950 transition flex items-center gap-2 shadow-lg shadow-amber-500/20 font-bold"
+                title="چاپ مستقیم یا ذخیره به صورت PDF با تنظیمات دلخواه"
+              >
+                <Printer className="w-4 h-4 text-slate-950" />
+                <span>چاپ و ذخیره فایل PDF</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

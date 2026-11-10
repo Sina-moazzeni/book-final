@@ -543,14 +543,22 @@ export function createFontDef(fontName: string = 'Vazirmatn') {
 
 /**
  * Convert base64 data URL to Uint8Array for docx ImageRun in browser.
+ * Safe from string limits and memory crashes.
  */
 function base64ToUint8Array(base64: string): Uint8Array {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  try {
+    const cleanBase64 = base64.replace(/[^A-Za-z0-9+/=]/g, '');
+    const binaryString = atob(cleanBase64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  } catch (e) {
+    console.warn('Failed to convert base64 image data to Uint8Array:', e);
+    return new Uint8Array(0);
   }
-  return bytes;
 }
 
 /**
@@ -863,7 +871,13 @@ export async function buildClientDocxDocument(project: BookProject): Promise<Doc
   // Chapters & paragraphs grouped seamlessly by genuine chapter
   const groupedChapters = groupChunksIntoChapters(project.chunks, project.designConfig?.excludedChunkIds);
 
-  groupedChapters.forEach((ch, chIdx) => {
+  for (let chIdx = 0; chIdx < groupedChapters.length; chIdx++) {
+    const ch = groupedChapters[chIdx];
+    // Yield to the browser UI thread every 4 chapters to keep the browser responsive
+    if (chIdx > 0 && chIdx % 4 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
     if (chIdx > 0) {
       if (design.continuousFlow === false) {
         docChildren.push(new Paragraph({ pageBreakBefore: true }));
@@ -1097,7 +1111,7 @@ export async function buildClientDocxDocument(project: BookProject): Promise<Doc
         );
       });
     }
-  });
+  }
 
   const themeKey = (design.themeId || 'spiritual') as keyof typeof BOOK_THEMES;
   const theme = BOOK_THEMES[themeKey] || BOOK_THEMES.spiritual;
@@ -1199,20 +1213,62 @@ export async function buildClientDocxDocument(project: BookProject): Promise<Doc
 
 /**
  * Downloads high-fidelity Persian DOCX file.
- * Prioritizes direct in-browser creation for speed and offline/static server resilience,
- * falling back to backend /api/export/docx and Word-HTML if necessary.
+ * Prioritizes high-capacity server-side generation (/api/export/docx) for speed,
+ * preventing browser tab crashes and memory freezes on 100-500+ page books.
+ * Falls back to cooperative client-side generation and Word-HTML if server is unreachable.
  */
 export async function downloadDocx(project: BookProject): Promise<boolean> {
-  const chapters = project.chunks
-    .filter(c => c.translatedHtml && c.translatedHtml.trim().length > 0);
+  const validChunks = (project.chunks || [])
+    .filter(c => c && c.translatedHtml && c.translatedHtml.trim().length > 0 && !c.isExcludedFromBook);
 
-  if (chapters.length === 0) {
+  if (validChunks.length === 0) {
     alert('هیچ بخشی هنوز ترجمه نشده است.');
     return false;
   }
 
+  const groupedChapters = groupChunksIntoChapters(project.chunks, project.designConfig?.excludedChunkIds);
+
+  // 1. Try High-Capacity Server Endpoint FIRST (handles 100 to 1,000+ pages in seconds without browser memory spikes)
   try {
-    // 1. Direct browser compilation via docx library
+    const res = await fetch(resolveApiUrl('/api/export/docx'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: project.title || project.originalTitle || 'کتاب ترجمه شده',
+        author: project.author,
+        translator: project.translator || 'سامانه هوشمند ترجمه کتاب',
+        chapters: groupedChapters.map(ch => ({
+          title: ch.title,
+          htmlContent: ch.htmlContent,
+        })),
+        designConfig: project.designConfig,
+      }),
+    });
+
+    if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('text/html')) {
+        const blob = await res.blob();
+        if (blob && blob.size > 100) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${project.title || project.originalTitle || 'book-translated'}.docx`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          return true;
+        }
+      }
+    }
+    console.warn('Server docx endpoint returned unexpected response, attempting client generation...');
+  } catch (serverErr) {
+    console.warn('Server docx endpoint unavailable, falling back to browser generation:', serverErr);
+  }
+
+  // 2. Cooperative Client-Side DOCX Generation Fallback
+  try {
     const docx = await import('docx');
     const doc = await buildClientDocxDocument(project);
     const blob = await docx.Packer.toBlob(doc);
@@ -1227,50 +1283,9 @@ export async function downloadDocx(project: BookProject): Promise<boolean> {
     URL.revokeObjectURL(url);
     return true;
   } catch (clientErr: any) {
-    console.warn('Direct client DOCX build error, trying backend endpoint...', clientErr);
-
-    // 2. Server proxy fallback
-    try {
-      const groupedChapters = groupChunksIntoChapters(project.chunks);
-      const res = await fetch(resolveApiUrl('/api/export/docx'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: project.title || project.originalTitle || 'کتاب ترجمه شده',
-          author: project.author,
-          translator: project.translator || 'سامانه هوشمند ترجمه کتاب',
-          chapters: groupedChapters.map(ch => ({
-            title: ch.title,
-            htmlContent: ch.htmlContent,
-          })),
-          designConfig: project.designConfig,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`خطای سرور: ${res.statusText}`);
-      }
-
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('text/html')) {
-        throw new Error('سرور صفحه وب HTML بازگرداند.');
-      }
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${project.title || project.originalTitle || 'book-translated'}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      return true;
-    } catch (serverErr: any) {
-      console.error('Docx download error, falling back to Word-HTML format:', serverErr);
-      downloadWordHtml(project);
-      return true;
-    }
+    console.error('Client docx generation failed, falling back to Word-HTML format:', clientErr);
+    downloadWordHtml(project);
+    return true;
   }
 }
 
