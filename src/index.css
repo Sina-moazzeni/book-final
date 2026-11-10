@@ -333,6 +333,19 @@
     break-inside: avoid !important;
   }
 
+  /* Memory & GPU optimization for high-capacity 100-500+ page books */
+  .print-only img,
+  .print-only .book-embedded-image,
+  .print-only .book-illustration-wrap img {
+    max-width: 85% !important;
+    max-height: 380px !important;
+    height: auto !important;
+    object-fit: contain !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    image-rendering: auto !important;
+  }
+
   table.print-doc-table {
     width: 100% !important;
     max-width: 100% !important;

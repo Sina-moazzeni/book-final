@@ -1652,6 +1652,331 @@ ${urls.map((u) => `  <url>
     });
   });
 
+  // High-Capacity Server-Side DOCX Generation (Engineered for books with 100 to 1000+ pages)
+  app.post('/api/export/docx', async (req, res) => {
+    try {
+      const { title, author, translator, chapters, designConfig } = req.body;
+      if (!Array.isArray(chapters) || chapters.length === 0) {
+        return res.status(400).json({ error: 'محتوایی برای خروجی فایل وجود ندارد.' });
+      }
+
+      const docx = await import('docx');
+      const {
+        Document,
+        Paragraph,
+        TextRun,
+        HeadingLevel,
+        AlignmentType,
+        ImageRun,
+        BorderStyle,
+        Header,
+        Footer,
+        PageNumber,
+        Packer,
+      } = docx;
+
+      const fontFamily = (designConfig?.fontFamily || 'Vazirmatn').replace(/\s+(Medium|Regular|Bold|Light|SemiBold|Black)$/i, '').trim() || 'Vazirmatn';
+      const fontDef = {
+        name: fontFamily,
+        hint: 'cs',
+        ascii: fontFamily,
+        hAnsi: fontFamily,
+        cs: fontFamily,
+        eastAsia: fontFamily,
+      };
+
+      const docChildren: any[] = [];
+      const cleanTitle = title || 'کتاب ترجمه شده';
+
+      // Title Cover Page
+      docChildren.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 1800, after: 300 },
+          bidirectional: true,
+          children: [
+            new TextRun({
+              text: cleanTitle,
+              font: fontDef,
+              size: 56, // 28pt
+              bold: true,
+              color: '1A365D',
+              rightToLeft: true,
+            }),
+          ],
+        })
+      );
+
+      if (author) {
+        docChildren.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 200 },
+            bidirectional: true,
+            children: [
+              new TextRun({
+                text: `نویسنده: ${author}`,
+                font: fontDef,
+                size: 26,
+                color: '4A5568',
+                rightToLeft: true,
+              }),
+            ],
+          })
+        );
+      }
+
+      if (translator) {
+        docChildren.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 300 },
+            bidirectional: true,
+            children: [
+              new TextRun({
+                text: `ترجمه و نگارش: ${translator}`,
+                font: fontDef,
+                size: 24,
+                italics: true,
+                color: '718096',
+                rightToLeft: true,
+              }),
+            ],
+          })
+        );
+      }
+
+      // Page break after title
+      docChildren.push(new Paragraph({ pageBreakBefore: true, spacing: { before: 400 } }));
+
+      // Process Chapters
+      chapters.forEach((ch: any, idx: number) => {
+        if (idx > 0) {
+          if (designConfig?.continuousFlow === false) {
+            docChildren.push(new Paragraph({ pageBreakBefore: true }));
+          } else {
+            docChildren.push(
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                spacing: { before: 400, after: 240 },
+                bidirectional: true,
+                children: [
+                  new TextRun({
+                    text: '✤ ───── ❦ ───── ✤',
+                    font: fontDef,
+                    size: 20,
+                    color: 'B45309',
+                  }),
+                ],
+              })
+            );
+          }
+        }
+
+        if (ch.title && ch.title.trim()) {
+          docChildren.push(
+            new Paragraph({
+              heading: HeadingLevel.HEADING_1,
+              alignment: AlignmentType.RIGHT,
+              spacing: { before: 500, after: 300 },
+              bidirectional: true,
+              children: [
+                new TextRun({
+                  text: ch.title.trim(),
+                  font: fontDef,
+                  size: 40, // 20pt
+                  bold: true,
+                  color: '1A365D',
+                  rightToLeft: true,
+                }),
+              ],
+            })
+          );
+        }
+
+        const html = ch.htmlContent || '';
+        const blockRegex = /<(h[1-3]|p|blockquote|div|figure)[^>]*>([\s\S]*?)<\/\1>|<img\s+[^>]*src=["'](data:image\/[^"']+)["'][^>]*>/gi;
+        let match;
+        let foundAny = false;
+
+        while ((match = blockRegex.exec(html)) !== null) {
+          foundAny = true;
+          // Standalone Image
+          if (match[3]) {
+            const dataUrl = match[3];
+            const commaIdx = dataUrl.indexOf(',');
+            if (commaIdx !== -1) {
+              try {
+                const base64Data = dataUrl.slice(commaIdx + 1).replace(/\s+/g, '');
+                const imgBuffer = Buffer.from(base64Data, 'base64');
+                const isJpg = dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg');
+                docChildren.push(
+                  new Paragraph({
+                    alignment: AlignmentType.CENTER,
+                    spacing: { before: 240, after: 240 },
+                    children: [
+                      new ImageRun({
+                        data: imgBuffer,
+                        transformation: { width: 440, height: 280 },
+                        type: isJpg ? 'jpg' : 'png',
+                      } as any),
+                    ],
+                  })
+                );
+              } catch (e) {}
+            }
+            continue;
+          }
+
+          const tag = (match[1] || 'p').toLowerCase();
+          const innerHtml = match[2] || '';
+
+          // Embedded images
+          const embeddedImgRegex = /<img\s+[^>]*src=["'](data:image\/[^"']+)["'][^>]*>/gi;
+          let imgMatch;
+          while ((imgMatch = embeddedImgRegex.exec(innerHtml)) !== null) {
+            try {
+              const dataUrl = imgMatch[1];
+              const commaIdx = dataUrl.indexOf(',');
+              if (commaIdx !== -1) {
+                const base64Data = dataUrl.slice(commaIdx + 1).replace(/\s+/g, '');
+                const imgBuffer = Buffer.from(base64Data, 'base64');
+                const isJpg = dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg');
+                docChildren.push(
+                  new Paragraph({
+                    alignment: AlignmentType.CENTER,
+                    spacing: { before: 240, after: 240 },
+                    children: [
+                      new ImageRun({
+                        data: imgBuffer,
+                        transformation: { width: 440, height: 280 },
+                        type: isJpg ? 'jpg' : 'png',
+                      } as any),
+                    ],
+                  })
+                );
+              }
+            } catch (e) {}
+          }
+
+          const plainText = innerHtml.replace(/<img[^>]*>/gi, '').replace(/<[^>]+>/g, '').trim();
+          if (!plainText) continue;
+
+          if (tag === 'h1' || tag === 'h2' || tag === 'h3') {
+            docChildren.push(
+              new Paragraph({
+                heading: tag === 'h1' ? HeadingLevel.HEADING_1 : tag === 'h2' ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3,
+                alignment: AlignmentType.RIGHT,
+                spacing: { before: 360, after: 180 },
+                bidirectional: true,
+                children: [
+                  new TextRun({
+                    text: plainText,
+                    font: fontDef,
+                    size: tag === 'h1' ? 36 : tag === 'h2' ? 30 : 26,
+                    bold: true,
+                    color: tag === 'h1' ? '1A365D' : tag === 'h2' ? '2B6CB0' : '2C5282',
+                    rightToLeft: true,
+                  }),
+                ],
+              })
+            );
+          } else if (tag === 'blockquote') {
+            docChildren.push(
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
+                spacing: { before: 240, after: 240 },
+                indent: { right: 720 },
+                bidirectional: true,
+                border: {
+                  right: { color: '2B6CB0', size: 24, style: BorderStyle.SINGLE },
+                },
+                children: [
+                  new TextRun({
+                    text: `« ${plainText} »`,
+                    font: fontDef,
+                    size: 24,
+                    color: '2B6CB0',
+                    rightToLeft: true,
+                  }),
+                ],
+              })
+            );
+          } else {
+            // Persian Paragraph
+            docChildren.push(
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
+                spacing: { line: 380, before: 60, after: 260 },
+                bidirectional: true,
+                children: [
+                  new TextRun({
+                    text: plainText,
+                    font: fontDef,
+                    size: 24, // 12pt
+                    color: '2D3748',
+                    rightToLeft: true,
+                  }),
+                ],
+              })
+            );
+          }
+        }
+
+        if (!foundAny) {
+          const lines = html.replace(/<[^>]+>/g, '').split('\n').map((l: string) => l.trim()).filter(Boolean);
+          lines.forEach((line: string) => {
+            docChildren.push(
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
+                spacing: { line: 360, after: 200 },
+                bidirectional: true,
+                children: [
+                  new TextRun({
+                    text: line,
+                    font: fontDef,
+                    size: 24,
+                    color: '2D3748',
+                    rightToLeft: true,
+                  }),
+                ],
+              })
+            );
+          });
+        }
+      });
+
+      const doc = new Document({
+        styles: {
+          default: {
+            document: {
+              run: { font: fontDef, rightToLeft: true, size: 24, color: '2D3748' },
+              paragraph: { alignment: AlignmentType.RIGHT, spacing: { line: 380, after: 260 } },
+            },
+          },
+        },
+        sections: [
+          {
+            properties: {
+              page: {
+                margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 },
+              },
+            },
+            children: docChildren,
+          },
+        ],
+      });
+
+      const buffer = await Packer.toBuffer(doc);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename=book_${Date.now()}.docx`);
+      return res.send(buffer);
+    } catch (err: any) {
+      console.error('[Export Docx Server Error]:', err);
+      return res.status(500).json({ error: err?.message || 'خطا در ساخت فایل Word' });
+    }
+  });
+
   // Add new page/chunk anywhere in the book (start, end, before or after any existing page)
   app.post('/api/books/:id/chunks', requireAuth, (req, res) => {
     const user = (req as any).user as User;
