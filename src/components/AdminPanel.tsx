@@ -76,6 +76,7 @@ import { DailyRevenueView } from './DailyRevenueView.tsx';
 import { AdminBookEditorModal } from './AdminBookEditorModal.tsx';
 import { downloadDocx } from '../utils/exporter.ts';
 import { CaptchaWidget } from './CaptchaWidget.tsx';
+import { resolveApiUrl } from '../utils/aiClient.ts';
 
 interface AdminPanelProps {
   currentUser: User;
@@ -1760,20 +1761,41 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
     }
   };
 
-  // Direct Browser Download of Backup JSON
+  // Direct Browser Download of Backup JSON (Safe against HTML errors)
   const handleDownloadBackup = async () => {
     setIsDownloadingBackup(true);
     try {
-      const res = await fetch('/api/admin/backup', {
+      const currentToken = localStorage.getItem('auth_token') || currentUser?.token || token || '';
+      const targetUrl = resolveApiUrl(`/api/admin/backup?token=${encodeURIComponent(currentToken)}`);
+
+      const res = await fetch(targetUrl, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${currentToken}`,
+          Accept: 'application/json',
         },
       });
+
+      const contentType = res.headers.get('content-type') || '';
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'خطا در دریافت فایل پشتیبان از سرور');
+        if (contentType.includes('application/json')) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `خطای سرور: ${res.status}`);
+        } else {
+          throw new Error(`خطای دریافت پشتیبان (کد ${res.status}): سرور صفحه وب بازگرداند. دسترسی مدیریت یا اتصال سرور را بررسی نمایید.`);
+        }
       }
-      const blob = await res.blob();
+
+      if (!contentType.includes('application/json')) {
+        throw new Error('سرور به جای فایل دیتابیس JSON، صفحه وب HTML بازگرداند. لطفاً ورود مجدد به پنل مدیریت را بررسی فرمایید.');
+      }
+
+      const rawText = await res.text();
+      if (!rawText.trim().startsWith('{')) {
+        throw new Error('پاسخ سرور قالب معتبر JSON پایگاه داده ندارد.');
+      }
+
+      const blob = new Blob([rawText], { type: 'application/json;charset=utf-8' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -1798,7 +1820,7 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
     }
   };
 
-  // Import and Restore Backup File
+  // Import and Restore Backup File (Protected against HTML files and 413 limits)
   const handleFileUploadForRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1806,7 +1828,22 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const jsonContent = JSON.parse(event.target?.result as string);
+        const rawContent = (event.target?.result as string) || '';
+
+        // Check if the uploaded file is an HTML page (e.g. from an earlier error)
+        if (rawContent.trim().startsWith('<') || rawContent.includes('<!DOCTYPE') || rawContent.includes('<html')) {
+          alert('فایل انتخاب‌شده یک صفحه وب HTML است و حاوی اطلاعات JSON دیتابیس نیست! احتمالاً قبلاً در زمان دانلود، سرور صفحه خطا بازگردانده بوده است. لطفاً فایل معتبر دیتابیس JSON را انتخاب فرمایید.');
+          return;
+        }
+
+        let jsonContent: any;
+        try {
+          jsonContent = JSON.parse(rawContent);
+        } catch (jsonErr: any) {
+          alert('فرمت فایل انتخابی ساختار معتبر JSON ندارد. لطفاً فایل اصلی بکاپ دیتابیس را انتخاب فرمایید.');
+          return;
+        }
+
         if (!jsonContent || (!jsonContent.data && !jsonContent.books && !jsonContent.users)) {
           alert('فرمت فایل پشتیبان نامعتبر است. این فایل ساختار دیتابیس سامانه ترجمه کتاب را ندارد.');
           return;
@@ -1818,14 +1855,27 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
         if (!confirmRestore) return;
 
         setIsImportingBackup(true);
-        const res = await fetch('/api/admin/restore', {
+        const currentToken = localStorage.getItem('auth_token') || currentUser?.token || token || '';
+        const targetUrl = resolveApiUrl(`/api/admin/restore?token=${encodeURIComponent(currentToken)}`);
+
+        const res = await fetch(targetUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${currentToken}`,
+            Accept: 'application/json',
           },
           body: JSON.stringify(jsonContent),
         });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const rawText = await res.text().catch(() => '');
+          if (res.status === 413 || rawText.includes('413') || rawText.includes('Too Large')) {
+            throw new Error('حجم فایل پشتیبان بیش از سقف وب‌سرور است (413 Request Entity Too Large).');
+          }
+          throw new Error(`خطای سرور (کد ${res.status}): سرور به جای پاسخ دیتابیس، صفحه وب بازگرداند.`);
+        }
 
         const data = await res.json();
         if (!res.ok || !data.success) {
@@ -1854,17 +1904,29 @@ export function AdminPanel({ currentUser, onBackToUserPanel, onLogout, onCostPer
     reader.readAsText(file);
   };
 
+  // Self-Healing Disk & Snapshots Books Recovery (Safe against HTML errors)
   const [isScanningDisk, setIsScanningDisk] = useState(false);
   const handleScanDiskBooks = async () => {
     setIsScanningDisk(true);
     try {
-      const res = await fetch('/api/admin/backup/scan-books', {
+      const currentToken = localStorage.getItem('auth_token') || currentUser?.token || token || '';
+      const targetUrl = resolveApiUrl(`/api/admin/backup/scan-books?token=${encodeURIComponent(currentToken)}`);
+
+      const res = await fetch(targetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${currentToken}`,
+          Accept: 'application/json',
         },
       });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`خطا در اسکن دیسک (کد ${res.status}): سرور صفحه وب HTML بازگرداند. دسترسی مدیریت را بررسی نمایید.`);
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'خطا در اسکن دیسک');
       setSettingsToast({

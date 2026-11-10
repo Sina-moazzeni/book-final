@@ -3831,30 +3831,37 @@ ${urls.map((u) => `  <url>
     return res.json({ success: true });
   });
 
-  // Admin Backup / Export Database
-  app.get('/api/admin/backup', requireAdmin, (req, res) => {
-    const backup = db.exportBackup();
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=book_translator_backup_${Date.now()}.json`);
-    return res.json(backup);
+  // Admin Backup / Export Database (JSON format with complete snapshot)
+  app.get(['/api/admin/backup', '/api/admin/backup/download'], requireStaffOrAdmin, (req, res) => {
+    try {
+      const backup = db.exportBackup();
+      const filename = `book_translator_backup_${Date.now()}.json`;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.status(200).send(JSON.stringify(backup, null, 2));
+    } catch (err: any) {
+      console.error('[Admin Backup Export Error]:', err);
+      return res.status(500).json({ error: err?.message || 'خطا در ایجاد فایل پشتیبان پایگاه داده' });
+    }
   });
 
-  // Admin Restore / Import Database Backup
-  app.post('/api/admin/restore', requireAdmin, (req, res) => {
+  // Admin Restore / Import Database Backup (Merge or overwrite books, users, pages, settings)
+  app.post(['/api/admin/restore', '/api/admin/backup/restore'], requireStaffOrAdmin, (req, res) => {
     try {
       const backupData = req.body;
       if (!backupData) {
-        return res.status(400).json({ error: 'محتوای فایل پشتیبان ارسال نشده است.' });
+        return res.status(400).json({ error: 'محتوای فایل پشتیبان ارسال نشده است یا ساختار نامعتبر است.' });
       }
       const result = db.importBackup(backupData);
       return res.json(result);
     } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'خطا در بازیابی پایگاه داده' });
+      console.error('[Admin Backup Restore Error]:', err);
+      return res.status(500).json({ error: err?.message || 'خطا در بازیابی پایگاه داده' });
     }
   });
 
-  // Admin Scan & Recover Books from Disk (data/books/*.json)
-  app.post('/api/admin/backup/scan-books', requireAdmin, (_req, res) => {
+  // Admin Scan & Recover Books from Disk & Snapshots (data/books/*.json, database.backup.json, backups/)
+  app.post(['/api/admin/backup/scan-books', '/api/admin/scan-books', '/api/books/recover-disk'], requireStaffOrAdmin, (_req, res) => {
     try {
       const recoveredCount = db.scanAndRecoverOrphanedBooks();
       return res.json({
@@ -3862,11 +3869,12 @@ ${urls.map((u) => `  <url>
         recoveredCount,
         totalBooks: db.getBooks().length,
         message: recoveredCount > 0
-          ? `تعداد ${recoveredCount} کتاب از روی دیسک با موفقیت اسکن و به فهرست کتاب‌ها بازگردانی شدند.`
-          : 'تمام فایل‌های کتاب موجود بر روی دیسک در پایگاه داده ثبت هستند و کتاب جدیدی یافت نشد.',
+          ? `تعداد ${recoveredCount} کتاب با موفقیت از روی دیسک و فایل‌های پشتیبان اسکن و احیا شدند.`
+          : 'تمام فایل‌های کتاب موجود بر روی دیسک و پشتیبان‌ها در پایگاه داده ثبت هستند و کتاب گمشده‌ای یافت نشد.',
       });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'خطا در اسکن دیسک' });
+      console.error('[Admin Scan Books Error]:', err);
+      return res.status(500).json({ error: err?.message || 'خطا در اسکن و احیای کتاب‌ها از دیسک' });
     }
   });
 
